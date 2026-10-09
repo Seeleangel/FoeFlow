@@ -24,3 +24,9 @@ playwright-report/
 test-results/
 coverage/
 *.tsbuildinfo
+
+# Local assistant notes and recovery records
+/CLAUDE.md
+/AGENTS.md
+/SOURCE_RECOVERY.md
+/STYLE_LEARNING.md

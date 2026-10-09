@@ -2,7 +2,7 @@
 
 FoeFlow 是面向公众号内容工作流的桌面辅助应用，包含文章审核、AI 写作与排版、文章库、Word 导出、邮箱待办和图片压缩。项目使用 React、TypeScript、Vite、Tauri 与 SQLite。
 
-本仓库已从个人备份恢复原始前端、Rust 后端及许可证服务源码。桌面配置版本为 **0.1.0**，恢复来源和验证状态见 [SOURCE_RECOVERY.md](SOURCE_RECOVERY.md)。恢复代码经过公开前整理，保留业务逻辑，排除了个人凭据与数据。
+仓库包含前端、Rust 后端、许可证服务和测试，桌面配置版本为 **0.1.0**。公开版本不包含个人凭据与运行数据。
 
 ## 本地开发
 
@@ -24,7 +24,7 @@ cd src-tauri
 cargo check --locked
 ```
 
-原始打包配置面向 Windows NSIS。在 Windows 配置好开发环境后，于仓库根目录执行 `npm run tauri -- build`。当前恢复过程不会重新发布安装包。
+原始打包配置面向 Windows NSIS。在 Windows 配置好开发环境后，于仓库根目录执行 `npm run tauri -- build`。
 
 ## 许可证服务
 
@@ -45,6 +45,10 @@ npm start
 ```bash
 DB_PATH=:memory: npm test
 ```
+
+## 当前验证状态
+
+前端构建与 Rust 检查通过；217 项前端测试和 7 项许可证服务测试通过。代码检查仍有 47 个错误和 11 个警告。Windows 重打包、完整桌面交互及真实 AI、邮箱、生产激活服务尚未验收。
 
 ## 目录
 
