@@ -1,0 +1,151 @@
+{
+  "name": "academic-serious",
+  "description": "学术严谨风格，适合研究报告和学术内容",
+  "colors": {
+    "primary": "#1e3a5f",
+    "secondary": "#3d5a80",
+    "text": "#2d3748",
+    "textLight": "#718096",
+    "background": "#ffffff",
+    "codeBg": "#edf2f7",
+    "codeColor": "#2d3748",
+    "quoteBorder": "#4a5568",
+    "quoteBg": "#f7fafc",
+    "border": "#e2e8f0"
+  },
+  "typography": {
+    "fontFamily": "'PingFang SC', 'Microsoft YaHei', 'Hiragino Sans GB', 'Georgia', 'Noto Serif SC', serif",
+    "fontSize": "16px",
+    "lineHeight": 1.85
+  },
+  "styles": {
+    "h1": {
+      "fontSize": "26px",
+      "fontWeight": "700",
+      "color": "primary",
+      "margin": "40px 0 20px 0",
+      "paddingBottom": "16px",
+      "borderBottom": "2px solid primary",
+      "lineHeight": "1.3",
+      "textAlign": "center",
+      "letterSpacing": "0.02em"
+    },
+    "h2": {
+      "fontSize": "21px",
+      "fontWeight": "600",
+      "color": "primary",
+      "margin": "32px 0 16px 0",
+      "paddingBottom": "10px",
+      "borderBottom": "1px solid border",
+      "lineHeight": "1.35",
+      "letterSpacing": "0.01em"
+    },
+    "h3": {
+      "fontSize": "18px",
+      "fontWeight": "600",
+      "color": "text",
+      "margin": "24px 0 12px 0",
+      "lineHeight": "1.45"
+    },
+    "h4": {
+      "fontSize": "17px",
+      "fontWeight": "600",
+      "color": "textLight",
+      "margin": "20px 0 10px 0",
+      "lineHeight": "1.45"
+    },
+    "p": {
+      "fontSize": "16px",
+      "lineHeight": "1.85",
+      "color": "text",
+      "margin": "16px 0"
+    },
+    "strong": {
+      "fontWeight": "700",
+      "color": "primary"
+    },
+    "em": {
+      "fontStyle": "italic",
+      "color": "text"
+    },
+    "code": {
+      "fontFamily": "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace",
+      "fontSize": "13px",
+      "background": "codeBg",
+      "color": "codeColor",
+      "padding": "2px 5px",
+      "borderRadius": "3px"
+    },
+    "pre": {
+      "background": "codeBg",
+      "color": "codeColor",
+      "padding": "16px",
+      "borderRadius": "4px",
+      "overflowX": "auto",
+      "margin": "20px 0",
+      "lineHeight": "1.6",
+      "border": "1px solid border"
+    },
+    "blockquote": {
+      "background": "quoteBg",
+      "margin": "20px 0",
+      "padding": "14px 18px",
+      "borderRadius": "4px",
+      "color": "text",
+      "fontStyle": "italic",
+      "border": "1px solid border"
+    },
+    "ul": {
+      "paddingLeft": "24px",
+      "margin": "16px 0"
+    },
+    "ol": {
+      "paddingLeft": "24px",
+      "margin": "16px 0"
+    },
+    "li": {
+      "fontSize": "16px",
+      "lineHeight": "1.85",
+      "color": "text",
+      "margin": "8px 0"
+    },
+    "table": {
+      "width": "100%",
+      "borderCollapse": "collapse",
+      "margin": "20px 0",
+      "fontSize": "14px"
+    },
+    "th": {
+      "background": "primary",
+      "color": "#ffffff",
+      "fontWeight": "600",
+      "padding": "12px 14px",
+      "textAlign": "left",
+      "border": "1px solid border"
+    },
+    "td": {
+      "padding": "10px 14px",
+      "border": "1px solid border",
+      "color": "text"
+    },
+    "tr": {
+      "background": "background"
+    },
+    "img": {
+      "maxWidth": "100%",
+      "height": "auto",
+      "display": "block",
+      "margin": "28px auto"
+    },
+    "a": {
+      "color": "primary",
+      "textDecoration": "underline",
+      "fontWeight": "500"
+    },
+    "hr": {
+      "border": "none",
+      "borderTop": "2px solid border",
+      "margin": "32px 0"
+    }
+  }
+}

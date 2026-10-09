@@ -1,0 +1,440 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Reduced motion - accessibility */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  :root {
+    /* Animation utilities - natural deceleration easing curves */
+    --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+    --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-in-out-quart: cubic-bezier(0.76, 0, 0.24, 1);
+    /* ECNU 品牌红色系 */
+    --brand: 0 85% 50%;
+    --brand-foreground: 0 0% 100%;
+    --brand-muted: 0 85% 95%;
+    --brand-border: 0 85% 85%;
+
+    /* 中性色 - 带微妙暖调 */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 12%;
+    --primary: 0 0% 8%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 8%;
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 45%;
+    --accent: 0 85% 96%;
+    --accent-foreground: 0 85% 40%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
+    --ring: 0 85% 50%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --brand: 0 85% 55%;
+    --brand-foreground: 0 0% 100%;
+    --brand-muted: 0 85% 20%;
+    --brand-border: 0 85% 40%;
+
+    --background: 0 0% 10%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 14%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 14%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 8%;
+    --secondary: 0 0% 20%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 20%;
+    --muted-foreground: 0 0% 64%;
+    --accent: 0 85% 25%;
+    --accent-foreground: 0 85% 65%;
+    --destructive: 0 62% 40%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 20%;
+    --input: 0 0% 20%;
+    --ring: 0 85% 55%;
+  }
+
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "Noto Sans SC", "WenQuanYi Micro Hei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer utilities {
+  /* Slow pulse for subtle breathing effect */
+  .animate-pulse-slow {
+    animation: pulse-slow 3s ease-in-out infinite;
+  }
+
+  .animate-ping {
+    animation: ping 1.5s var(--ease-out-quart) infinite;
+  }
+
+  /* Sparkle animation for icons */
+  .animate-sparkle {
+    animation: sparkle 2s ease-in-out infinite;
+  }
+
+  /* Entrance animations — use `both` so keyframe 0% applies before animation starts,
+     eliminating the need for a static `opacity: 0` that could leave elements invisible
+     if the animation fails to trigger (e.g. React Strict Mode double-render). */
+  .animate-fade-in {
+    animation: fade-in 0.5s var(--ease-out-quart) both;
+  }
+
+  .animate-fade-in-up {
+    animation: fade-in-up 0.6s var(--ease-out-quart) both;
+  }
+
+  .animate-fade-in-down {
+    animation: fade-in-down 0.5s var(--ease-out-quart) both;
+  }
+
+  .animate-scale-in {
+    animation: scale-in 0.3s var(--ease-out-quart) both;
+    transform-origin: center;
+  }
+
+  .animate-slide-in-right {
+    animation: slide-in-right 0.4s var(--ease-out-quart) both;
+  }
+
+  /* Stagger delays */
+  .animate-delay-100 {
+    animation-delay: 0.1s;
+  }
+
+  .animate-delay-150 {
+    animation-delay: 0.15s;
+  }
+
+  .animate-delay-200 {
+    animation-delay: 0.2s;
+  }
+
+  .animate-delay-300 {
+    animation-delay: 0.3s;
+  }
+
+  /* Micro-interactions */
+  .hover-lift {
+    transition: transform 0.2s var(--ease-out-quart), box-shadow 0.2s var(--ease-out-quart);
+  }
+
+  .hover-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.08);
+  }
+
+  .hover-scale {
+    transition: transform 0.15s var(--ease-out-quart);
+  }
+
+  .hover-scale:hover {
+    transform: scale(1.02);
+  }
+
+  .press-scale {
+    transition: transform 0.1s var(--ease-out-quart);
+  }
+
+  .press-scale:active {
+    transform: scale(0.96);
+  }
+
+  .hover-glow {
+    transition: box-shadow 0.2s var(--ease-out-quart), transform 0.2s var(--ease-out-quart);
+  }
+
+  .hover-glow:hover {
+    box-shadow: 0 0 20px rgba(226, 32, 7, 0.15);
+    transform: translateY(-1px);
+  }
+
+  /* Hide scrollbars */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Loading animations */
+  @keyframes shimmer {
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
+    }
+  }
+
+  .animate-shimmer {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%, #f0f0f0 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+
+  @keyframes pulse-ring {
+    0% {
+      transform: scale(0.8);
+      opacity: 0.5;
+    }
+    100% {
+      transform: scale(1.3);
+      opacity: 0;
+    }
+  }
+
+  .animate-pulse-ring::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: currentColor;
+    opacity: 0.3;
+    animation: pulse-ring 1.5s var(--ease-out-quart) infinite;
+  }
+}
+
+@keyframes fade-in {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in-up {
+  0% {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in-down {
+  0% {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scale-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes slide-in-right {
+  0% {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse-slow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+@keyframes ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.4;
+  }
+  100% {
+    transform: scale(2.5);
+    opacity: 0;
+  }
+}
+
+@keyframes sparkle {
+  0%, 100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1) rotate(5deg);
+    opacity: 0.8;
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+@keyframes float-reverse {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(10px);
+  }
+}
+
+@keyframes breathe {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.3);
+    opacity: 0.7;
+  }
+}
+
+/* Chalk dust falling */
+@keyframes chalk-fall {
+  0% {
+    transform: translateY(0) translateX(0);
+    opacity: 0.25;
+  }
+  25% {
+    transform: translateY(25vh) translateX(8px);
+    opacity: 0.15;
+  }
+  50% {
+    transform: translateY(50vh) translateX(-4px);
+    opacity: 0.2;
+  }
+  75% {
+    transform: translateY(75vh) translateX(6px);
+    opacity: 0.1;
+  }
+  100% {
+    transform: translateY(100vh) translateX(-2px);
+    opacity: 0;
+  }
+}
+
+.animate-chalk-fall {
+  animation: chalk-fall linear infinite;
+}
+
+/* Typewriter cursor blink */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.animate-blink {
+  animation: blink 1s step-end infinite;
+}
+
+/* Wiggle for magnifier hover */
+@keyframes wiggle {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-6deg); }
+  75% { transform: rotate(6deg); }
+}
+
+.animate-wiggle {
+  animation: wiggle 0.4s ease-in-out infinite;
+}
+
+/* Gentle float for empty state icons */
+@keyframes gentle-float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+/* Shimmer bar for loading indicators */
+@keyframes shimmer-bar {
+  0% {
+    transform: translateX(-100%);
+  }
+  50% {
+    transform: translateX(150%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+
+/* Paper texture — subtle grain that breathes */
+.paper-texture {
+  background-image:
+    radial-gradient(circle at 20% 30%, rgba(0,0,0,0.04) 0%, transparent 50%),
+    radial-gradient(circle at 80% 70%, rgba(0,0,0,0.03) 0%, transparent 40%),
+    radial-gradient(circle at 50% 50%, rgba(0,0,0,0.02) 0%, transparent 60%);
+  background-size: 120% 120%, 150% 150%, 100% 100%;
+  animation: paper-breathe 10s ease-in-out infinite;
+}
+
+@keyframes paper-breathe {
+  0%, 100% {
+    background-position: 0% 0%, 0% 0%, 0% 0%;
+    transform: scale(1);
+  }
+  33% {
+    background-position: 2% 1%, -1% 2%, 1% -1%;
+    transform: scale(1.005);
+  }
+  66% {
+    background-position: -1% 2%, 2% -1%, -1% 1%;
+    transform: scale(1.002);
+  }
+}

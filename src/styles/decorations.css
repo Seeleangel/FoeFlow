@@ -1,0 +1,407 @@
+/**
+ * Decoration System Styles for FOE Publicity
+ *
+ * CSS styles for AI-powered article decorations.
+ * Note: Most decorations use inline styles for WeChat/Xiemi compatibility.
+ * This file contains supplemental styles and hover effects.
+ */
+
+/* ==================================================================
+   Base Decoration Styles
+   ================================================================== */
+
+.decoration {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ==================================================================
+   Title Badge
+   ================================================================== */
+
+.decoration.title-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 16px;
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: 8px;
+  transition: transform 0.2s ease;
+}
+
+.decoration.title-badge:hover {
+  transform: scale(1.05);
+}
+
+/* ==================================================================
+   Info Box
+   ================================================================== */
+
+.decoration.info-box {
+  margin: 16px 0;
+  padding: 16px;
+  border-radius: 12px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+}
+
+.decoration.info-box > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.decoration.info-box > div:first-child span:first-child {
+  font-size: 18px;
+}
+
+.decoration.info-box > div:first-child span:last-child {
+  font-weight: 600;
+  color: #0369a1;
+  font-size: 15px;
+}
+
+.decoration.info-box > div:last-child {
+  background: white;
+  padding: 12px;
+  border-radius: 8px;
+}
+
+/* ==================================================================
+   Highlight Box
+   ================================================================== */
+
+.decoration.highlight-box {
+  margin: 16px 0;
+  padding: 16px 20px;
+  border-left: 4px solid;
+  border-radius: 8px;
+  line-height: 1.7;
+}
+
+.decoration.highlight-box.highlight-warning {
+  background: #fef3c7;
+  border-color: #fcd34d;
+  color: #92400e;
+}
+
+.decoration.highlight-box.highlight-success {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #166534;
+}
+
+.decoration.highlight-box.highlight-info {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1e40af;
+}
+
+/* ==================================================================
+   Callout
+   ================================================================== */
+
+.decoration.callout {
+  margin: 16px 0;
+  padding: 14px 18px;
+  border-radius: 10px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  line-height: 1.6;
+}
+
+.decoration.callout.callout-tip {
+  background: #fefce8;
+  color: #854d0e;
+}
+
+.decoration.callout.callout-warning {
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.decoration.callout.callout-danger {
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.decoration.callout.callout-info {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.decoration.callout > span:first-child {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.decoration.callout > div:last-child {
+  flex: 1;
+}
+
+/* ==================================================================
+   Section Divider
+   ================================================================== */
+
+.decoration.section-divider {
+  margin: 32px 0;
+  text-align: center;
+  color: #d1d5db;
+}
+
+.decoration.section-divider[data-style='diamond'] {
+  font-size: 18px;
+  letter-spacing: 8px;
+}
+
+.decoration.section-divider[data-style='dots'] {
+  color: #9ca3af;
+  font-size: 12px;
+  letter-spacing: 4px;
+}
+
+.decoration.section-divider[data-style='wave'] {
+  color: #e5e7eb;
+  font-size: 20px;
+}
+
+/* ==================================================================
+   Gradient Background
+   ================================================================== */
+
+.decoration.gradient-bg {
+  margin: 16px 0;
+  padding: 20px 24px;
+  border-radius: 12px;
+  color: white;
+  background-size: 200% 200%;
+  animation: gradient-shift 15s ease infinite;
+}
+
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.decoration.gradient-bg > div {
+  color: white;
+  line-height: 1.7;
+}
+
+/* ==================================================================
+   Border Accent
+   ================================================================== */
+
+.decoration.border-accent {
+  margin: 16px 0;
+  padding: 16px 20px;
+}
+
+.decoration.border-accent.border-rounded {
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+}
+
+.decoration.border-accent.border-corners {
+  border: 2px solid #e5e7eb;
+  border-radius: 0;
+  position: relative;
+}
+
+.decoration.border-accent.border-corners::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+  background: #e5e7eb;
+  border-radius: 50%;
+}
+
+.decoration.border-accent.border-corners::after {
+  content: '';
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 8px;
+  height: 8px;
+  background: #e5e7eb;
+  border-radius: 50%;
+}
+
+.decoration.border-accent.border-full {
+  border: 2px dashed #d1d5db;
+  border-radius: 8px;
+}
+
+/* ==================================================================
+   Centered Quote
+   ================================================================== */
+
+.decoration.centered-quote {
+  margin: 24px 0;
+  text-align: center;
+}
+
+.decoration.centered-quote p {
+  font-size: 16px;
+  color: #4b5563;
+  line-height: 1.8;
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+.decoration.centered-quote[data-size='large'] p {
+  font-size: 20px;
+  font-style: italic;
+}
+
+/* ==================================================================
+   Sidebar Note
+   ================================================================== */
+
+.decoration.sidebar-note {
+  margin: 16px 0;
+  padding: 12px 16px;
+  background: #f9fafb;
+  border-left: 3px solid #9ca3af;
+  border-radius: 0 6px 6px 0;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.decoration.sidebar-note > div:first-child {
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.decoration.sidebar-note > div:last-child {
+  line-height: 1.6;
+}
+
+/* ==================================================================
+   First Letter Drop
+   ================================================================== */
+
+.decoration.first-letter-drop {
+  line-height: 1.8;
+}
+
+.decoration.first-letter-drop > span:first-child {
+  float: left;
+  font-weight: 700;
+  color: #2563eb;
+  margin-right: 8px;
+  margin-bottom: -4px;
+  line-height: 1;
+}
+
+.decoration.first-letter-drop::after {
+  content: '';
+  display: table;
+  clear: both;
+}
+
+/* ==================================================================
+   Progress Indicator
+   ================================================================== */
+
+.decoration.progress-indicator {
+  margin: 16px 0;
+  padding: 12px 16px;
+  background: #f3f4f6;
+  border-radius: 8px;
+}
+
+.decoration.progress-indicator > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.decoration.progress-indicator > div:first-child span {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.decoration.progress-indicator > div:last-child {
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.decoration.progress-indicator > div:last-child > div {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #667eea, #764ba2);
+  transition: width 0.3s ease;
+}
+
+/* ==================================================================
+   Emoji Prefix
+   ================================================================== */
+
+.decoration.emoji-prefix {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ==================================================================
+   Responsive Adjustments
+   ================================================================== */
+
+@media (max-width: 640px) {
+  .decoration.info-box,
+  .decoration.highlight-box,
+  .decoration.callout,
+  .decoration.gradient-bg,
+  .decoration.border-accent {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .decoration.centered-quote p {
+    max-width: 100%;
+  }
+
+  .decoration.first-letter-drop > span:first-child {
+    font-size: 1.5em;
+  }
+}
+
+/* ==================================================================
+   Print Styles
+   ================================================================== */
+
+@media print {
+  .decoration.gradient-bg {
+    background: #f3f4f6 !important;
+    color: #1f2937 !important;
+  }
+
+  .decoration.gradient-bg > div {
+    color: #1f2937 !important;
+  }
+
+  .decoration.callout,
+  .decoration.highlight-box,
+  .decoration.info-box {
+    border: 1px solid #d1d5db !important;
+  }
+}

@@ -1,0 +1,151 @@
+{
+  "name": "youth-energy",
+  "description": "青春活力风格，适合学生活动和青年内容",
+  "colors": {
+    "primary": "#10b981",
+    "secondary": "#34d399",
+    "text": "#1f2937",
+    "textLight": "#6b7280",
+    "background": "#ffffff",
+    "codeBg": "#ecfdf5",
+    "codeColor": "#059669",
+    "quoteBorder": "#10b981",
+    "quoteBg": "#f0fdf4",
+    "border": "#d1fae5"
+  },
+  "typography": {
+    "fontFamily": "'PingFang SC', 'Microsoft YaHei', 'Hiragino Sans GB', -apple-system, BlinkMacSystemFont, sans-serif",
+    "fontSize": "16px",
+    "lineHeight": 1.7
+  },
+  "styles": {
+    "h1": {
+      "fontSize": "28px",
+      "fontWeight": "800",
+      "color": "primary",
+      "margin": "32px 0 16px 0",
+      "paddingBottom": "12px",
+      "borderBottom": "3px dashed primary",
+      "lineHeight": "1.3",
+      "textAlign": "center"
+    },
+    "h2": {
+      "fontSize": "22px",
+      "fontWeight": "700",
+      "color": "primary",
+      "margin": "28px 0 14px 0",
+      "padding": "8px 12px",
+      "background": "quoteBg",
+      "borderRadius": "8px",
+      "lineHeight": "1.35"
+    },
+    "h3": {
+      "fontSize": "18px",
+      "fontWeight": "600",
+      "color": "primary",
+      "margin": "24px 0 12px 0",
+      "lineHeight": "1.4"
+    },
+    "h4": {
+      "fontSize": "17px",
+      "fontWeight": "600",
+      "color": "textLight",
+      "margin": "20px 0 10px 0",
+      "lineHeight": "1.4"
+    },
+    "p": {
+      "fontSize": "16px",
+      "lineHeight": "1.7",
+      "color": "text",
+      "margin": "12px 0"
+    },
+    "strong": {
+      "fontWeight": "700",
+      "color": "primary"
+    },
+    "em": {
+      "fontStyle": "italic",
+      "color": "primary"
+    },
+    "code": {
+      "fontFamily": "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace",
+      "fontSize": "14px",
+      "background": "codeBg",
+      "color": "codeColor",
+      "padding": "3px 8px",
+      "borderRadius": "6px"
+    },
+    "pre": {
+      "background": "codeBg",
+      "color": "codeColor",
+      "padding": "16px",
+      "borderRadius": "12px",
+      "overflowX": "auto",
+      "margin": "16px 0",
+      "lineHeight": "1.6",
+      "border": "2px solid border"
+    },
+    "blockquote": {
+      "background": "quoteBg",
+      "margin": "16px 0",
+      "padding": "16px",
+      "borderRadius": "10px",
+      "color": "text",
+      "border": "1px solid border"
+    },
+    "ul": {
+      "paddingLeft": "24px",
+      "margin": "12px 0"
+    },
+    "ol": {
+      "paddingLeft": "24px",
+      "margin": "12px 0"
+    },
+    "li": {
+      "fontSize": "16px",
+      "lineHeight": "1.7",
+      "color": "text",
+      "margin": "6px 0"
+    },
+    "table": {
+      "width": "100%",
+      "borderCollapse": "collapse",
+      "margin": "16px 0",
+      "fontSize": "15px"
+    },
+    "th": {
+      "background": "primary",
+      "color": "#ffffff",
+      "fontWeight": "600",
+      "padding": "10px 14px",
+      "textAlign": "left",
+      "border": "1px solid border"
+    },
+    "td": {
+      "padding": "10px 14px",
+      "border": "1px solid border",
+      "color": "text"
+    },
+    "tr": {
+      "background": "background"
+    },
+    "img": {
+      "maxWidth": "100%",
+      "height": "auto",
+      "display": "block",
+      "margin": "24px auto",
+      "borderRadius": "12px"
+    },
+    "a": {
+      "color": "primary",
+      "textDecoration": "none",
+      "fontWeight": "600",
+      "borderBottom": "2px solid secondary"
+    },
+    "hr": {
+      "border": "none",
+      "borderTop": "2px dashed border",
+      "margin": "24px 0"
+    }
+  }
+}

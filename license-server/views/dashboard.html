@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>License Dashboard</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: #f5f5f4;
+    color: #1c1917;
+  }
+  header {
+    background: #fff;
+    border-bottom: 1px solid #e7e5e4;
+    padding: 16px 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  header h1 { margin: 0; font-size: 18px; }
+  header button {
+    background: transparent;
+    border: 1px solid #d6d3d1;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .container { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+  }
+  .stat-card .label { font-size: 12px; color: #78716c; text-transform: uppercase; letter-spacing: .5px; }
+  .stat-card .value { font-size: 28px; font-weight: 600; margin-top: 6px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    font-size: 14px;
+  }
+  th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #f0eeec; }
+  th { background: #fafaf9; font-weight: 500; color: #57534e; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+  tr:last-child td { border-bottom: none; }
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .badge.unused { background: #e7e5e4; color: #44403c; }
+  .badge.used   { background: #dcfce7; color: #166534; }
+  .badge.revoked{ background: #fee2e2; color: #991b1b; }
+  .actions button {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid #d6d3d1;
+    background: #fff;
+    cursor: pointer;
+    margin-right: 6px;
+  }
+  .actions button:hover { background: #f5f5f4; }
+  .actions button.danger { border-color: #fecaca; color: #991b1b; }
+  .actions button.danger:hover { background: #fee2e2; }
+  .actions button.primary { border-color: #dcfce7; background: #dcfce7; color: #166534; }
+  .actions button.primary:hover { background: #bbf7d0; }
+  .section-title { font-size: 16px; font-weight: 600; margin: 32px 0 12px; color: #44403c; }
+  .empty-state { text-align: center; color: #a8a29e; padding: 32px; font-size: 14px; }
+  .token { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>License Dashboard</h1>
+  <button id="logout">Logout</button>
+</header>
+<div class="container">
+  <div class="stats" id="stats"></div>
+
+  <div class="section-title">待审核请求</div>
+  <table id="claims-table">
+    <thead>
+      <tr>
+        <th>设备标识</th>
+        <th>Token</th>
+        <th>提交时间</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody id="claims-tbody"></tbody>
+  </table>
+
+  <div class="section-title">校验码管理</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Code</th>
+        <th>Status</th>
+        <th>Created</th>
+        <th>Machine Fingerprint</th>
+        <th>Activated</th>
+        <th>Last Verified</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+<script>
+  const auth = sessionStorage.getItem('adminAuth');
+  if (!auth) location.href = '/admin';
+
+  async function api(path, opts = {}) {
+    const res = await fetch('/admin' + path, { ...opts, headers: { ...opts.headers, Authorization: auth } });
+    if (res.status === 401) { sessionStorage.removeItem('adminAuth'); location.href = '/admin'; }
+    return res;
+  }
+
+  function fmt(ts) {
+    if (!ts) return '-';
+    return new Date(ts * 1000).toLocaleString('zh-CN');
+  }
+
+  async function loadClaims() {
+    const res = await api('/api/pending-claims');
+    const data = await res.json();
+    const tbody = document.getElementById('claims-tbody');
+    if (!data.claims || data.claims.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-state">暂无待审核请求</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.claims.map(c => `
+      <tr>
+        <td class="token">${c.deviceFingerprint}</td>
+        <td class="token">${c.token}</td>
+        <td>${fmt(c.createdAt)}</td>
+        <td class="actions">
+          <button class="primary" onclick="approve('${c.token}')">通过</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  async function approve(token) {
+    const res = await api('/api/approve-claim', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      alert('已通过，分配的校验码：' + data.code);
+      load();
+    } else {
+      alert('审核失败：' + (data.error || '未知错误'));
+    }
+  }
+
+  async function load() {
+    const [statsRes, codesRes] = await Promise.all([api('/api/stats'), api('/api/codes')]);
+    const stats = await statsRes.json();
+    const codes = await codesRes.json();
+
+    document.getElementById('stats').innerHTML = [
+      ['Total', stats.total],
+      ['Unused', stats.unused],
+      ['Used', stats.used],
+      ['Revoked', stats.revoked],
+    ].map(([label, value]) => `
+      <div class="stat-card">
+        <div class="label">${label}</div>
+        <div class="value">${value}</div>
+      </div>
+    `).join('');
+
+    document.getElementById('tbody').innerHTML = codes.map(c => `
+      <tr>
+        <td>${c.code}</td>
+        <td><span class="badge ${c.status}">${c.status}</span></td>
+        <td>${fmt(c.created_at)}</td>
+        <td>${c.machine_fingerprint || '-'}</td>
+        <td>${fmt(c.activated_at)}</td>
+        <td>${fmt(c.last_verified_at)}</td>
+        <td class="actions">
+          ${c.status !== 'revoked'
+            ? `<button class="danger" onclick="revoke('${c.code}')">Revoke</button>`
+            : `<button onclick="restore('${c.code}')">Restore</button>`}
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  async function revoke(code) {
+    if (!confirm('Revoke ' + code + '?')) return;
+    await api('/api/revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    load();
+  }
+  async function restore(code) {
+    if (!confirm('Restore ' + code + '?')) return;
+    await api('/api/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    load();
+  }
+
+  document.getElementById('logout').addEventListener('click', () => {
+    sessionStorage.removeItem('adminAuth');
+    location.href = '/admin';
+  });
+
+  load();
+  loadClaims();
+  setInterval(loadClaims, 5000);
+</script>
+</body>
+</html>

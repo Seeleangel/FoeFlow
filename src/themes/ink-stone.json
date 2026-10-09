@@ -1,0 +1,155 @@
+{
+  "name": "ink-stone",
+  "description": "水墨石风格，适合传统文化和人文内容",
+  "colors": {
+    "primary": "#5c5c5c",
+    "secondary": "#8b7355",
+    "text": "#2b2b2b",
+    "textLight": "#999999",
+    "background": "#faf9f7",
+    "codeBg": "#f0eee9",
+    "codeColor": "#5c5c5c",
+    "quoteBorder": "#a89f91",
+    "quoteBg": "#f5f3ef",
+    "border": "#e0ddd5"
+  },
+  "typography": {
+    "fontFamily": "'PingFang SC', 'Microsoft YaHei', 'Hiragino Sans GB', 'Kaiti SC', 'STKaiti', serif",
+    "fontSize": "16px",
+    "lineHeight": 1.9
+  },
+  "styles": {
+    "h1": {
+      "fontSize": "28px",
+      "fontWeight": "400",
+      "color": "primary",
+      "margin": "40px 0 20px 0",
+      "paddingBottom": "16px",
+      "borderBottom": "2px solid primary",
+      "lineHeight": "1.3",
+      "textAlign": "center",
+      "fontFamily": "'Kaiti SC', 'STKaiti', serif"
+    },
+    "h2": {
+      "fontSize": "20px",
+      "fontWeight": "500",
+      "color": "text",
+      "margin": "32px 0 16px 0",
+      "padding": "8px 12px",
+      "background": "quoteBg",
+      "borderRadius": "4px",
+      "lineHeight": "1.35"
+    },
+    "h3": {
+      "fontSize": "17px",
+      "fontWeight": "500",
+      "color": "primary",
+      "margin": "24px 0 12px 0",
+      "lineHeight": "1.5",
+      "fontFamily": "'Kaiti SC', 'STKaiti', serif"
+    },
+    "h4": {
+      "fontSize": "16px",
+      "fontWeight": "600",
+      "color": "textLight",
+      "margin": "20px 0 10px 0",
+      "lineHeight": "1.5"
+    },
+    "p": {
+      "fontSize": "16px",
+      "lineHeight": "1.9",
+      "color": "text",
+      "margin": "16px 0"
+    },
+    "strong": {
+      "fontWeight": "600",
+      "color": "primary"
+    },
+    "em": {
+      "fontStyle": "italic",
+      "color": "text"
+    },
+    "code": {
+      "fontFamily": "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace",
+      "fontSize": "13px",
+      "background": "codeBg",
+      "color": "text",
+      "padding": "2px 6px",
+      "borderRadius": "2px"
+    },
+    "pre": {
+      "background": "codeBg",
+      "color": "text",
+      "padding": "18px",
+      "borderRadius": "4px",
+      "overflowX": "auto",
+      "margin": "20px 0",
+      "lineHeight": "1.7",
+      "border": "1px solid border"
+    },
+    "blockquote": {
+      "background": "quoteBg",
+      "margin": "20px 0",
+      "padding": "16px 20px",
+      "borderRadius": "4px",
+      "color": "text",
+      "fontStyle": "italic",
+      "border": "1px solid border"
+    },
+    "ul": {
+      "paddingLeft": "24px",
+      "margin": "16px 0"
+    },
+    "ol": {
+      "paddingLeft": "24px",
+      "margin": "16px 0"
+    },
+    "li": {
+      "fontSize": "16px",
+      "lineHeight": "1.9",
+      "color": "text",
+      "margin": "8px 0"
+    },
+    "table": {
+      "width": "100%",
+      "borderCollapse": "collapse",
+      "margin": "20px 0",
+      "fontSize": "14px"
+    },
+    "th": {
+      "background": "background",
+      "color": "primary",
+      "fontWeight": "600",
+      "padding": "10px 14px",
+      "textAlign": "left",
+      "borderBottom": "2px solid primary"
+    },
+    "td": {
+      "padding": "10px 14px",
+      "border": "1px solid border",
+      "color": "text"
+    },
+    "tr": {
+      "background": "background"
+    },
+    "img": {
+      "maxWidth": "100%",
+      "height": "auto",
+      "display": "block",
+      "margin": "28px auto",
+      "borderRadius": "4px",
+      "filter": "grayscale(0.1) contrast(0.95)"
+    },
+    "a": {
+      "color": "secondary",
+      "textDecoration": "none",
+      "fontWeight": "500",
+      "borderBottom": "1px dashed secondary"
+    },
+    "hr": {
+      "border": "none",
+      "borderTop": "1px solid border",
+      "margin": "32px 0"
+    }
+  }
+}
