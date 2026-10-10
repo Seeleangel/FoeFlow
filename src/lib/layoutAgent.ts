@@ -1,6 +1,7 @@
 import { callAI } from './ai';
+import { runAgent, abortable, isAbortError, throwIfAborted, type AgentRunOptions, type AgentTermination } from './agentRuntime';
 import type { StyleSpec, LayoutDirection, LayoutReview, ReviewVerdict } from '@/types/layout';
-import { LAYOUT_AGENT_SYSTEM_PROMPT, LAYOUT_ANALYZE_PROMPT } from './promptStorage';
+import { loadPromptTemplates, LAYOUT_AGENT_SYSTEM_PROMPT } from './promptStorage';
 import { PLACEHOLDER_IMG_DATA_URI } from './placeholders';
 export { LAYOUT_AGENT_SYSTEM_PROMPT };
 
@@ -8,6 +9,7 @@ export interface LayoutAgentResult {
   html: string;
   review: LayoutReview;
   fixRounds: number;
+  termination?: AgentTermination;
 }
 
 const MAX_RETRIES = 2;
@@ -30,17 +32,34 @@ function extractHtmlFromResponse(response: string): string {
     return match[0];
   }
 
-  console.warn('[layoutAgent] extractHtmlFromResponse failed — preview (first 300 chars):',
-    cleaned.substring(0, 300));
   return '';
+}
+
+/** Validate structure before a model-generated layout can replace the preview. */
+export function validateLayoutHtml(html: string): string[] {
+  if (!html.trim()) return ['未输出完整 HTML'];
+  if (!/<(section|div)\b[^>]*data-role\s*=\s*["']outer["'][^>]*>/i.test(html)) return ['缺少 data-role="outer" 外层'];
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const root = doc.body.firstElementChild;
+  if (!root || doc.body.children.length !== 1 || root.getAttribute('data-role') !== 'outer') return ['必须为单一外层容器'];
+  if (!new RegExp(`</${root.tagName}>\\s*$`, 'i').test(html)) return ['外层 HTML 未闭合'];
+  const issues: string[] = [];
+  if (doc.querySelector('script,iframe,object,embed,form,input,link,meta,foreignObject')) issues.push('包含不适用于文章排版的活动元素');
+  for (const node of doc.querySelectorAll('*')) {
+    for (const attr of node.attributes) {
+      if (/^on/i.test(attr.name) || /(?:javascript|vbscript)\s*:/i.test(attr.value)) issues.push('包含事件处理或脚本地址');
+    }
+  }
+  return [...new Set(issues)];
 }
 
 function parseVerdict(v: string): ReviewVerdict {
   const valid: ReviewVerdict[] = ['pass', 'warn', 'fail'];
-  return valid.includes(v as ReviewVerdict) ? (v as ReviewVerdict) : 'warn';
+  return valid.includes(v.toLowerCase() as ReviewVerdict) ? (v.toLowerCase() as ReviewVerdict) : 'warn';
 }
 
 function parseSelfReview(response: string): LayoutReview {
+  response = response.split(/<(?:section|div)\b/i)[0];
   const readingMatch = response.match(/阅读体验[：:\s]*(pass|warn|fail)/i);
   const visualMatch = response.match(/视觉结构[：:\s]*(pass|warn|fail)/i);
   const memoryMatch = response.match(/记忆点[：:\s]*(pass|warn|fail)/i);
@@ -81,7 +100,7 @@ function buildStylePrompt(spec: StyleSpec, direction: LayoutDirection): string {
   ].filter((l) => l !== '').join('\n');
 }
 
-export interface RunLayoutAgentOptions {
+export interface RunLayoutAgentOptions extends AgentRunOptions {
   skipAnalyze?: boolean;
 }
 
@@ -91,120 +110,61 @@ export async function runLayoutAgent(
   direction: LayoutDirection,
   options?: RunLayoutAgentOptions,
 ): Promise<LayoutAgentResult> {
+  throwIfAborted(options?.signal);
+  const templates = await abortable(loadPromptTemplates(), options?.signal);
   const styleBlock = buildStylePrompt(spec, direction);
-
-  // ── Pass 1: Analyze ──
   let styleAnalysis = '';
   if (!options?.skipAnalyze) {
-    console.log('[layoutAgent] Pass 1: Analyzing article style...');
-    try {
-      const analyzeResp = await callAI({
-        messages: [
-          { role: 'system', content: LAYOUT_ANALYZE_PROMPT },
-          { role: 'user', content: `${styleBlock}\n\n## 文章内容\n${articleContent}` },
-        ],
-        temperature: 0.5,
-        purpose: 'layoutAnalyze',
-      });
-      styleAnalysis = analyzeResp.content;
-      console.log('[layoutAgent] Style analysis:', styleAnalysis.substring(0, 200));
-    } catch (err) {
-      console.warn('[layoutAgent] Analyze pass failed, continuing without analysis:', err);
-    }
+    const analyzeResp = await abortable(callAI({
+      messages: [
+        { role: 'system', content: templates.layoutAnalyzePrompt },
+        { role: 'user', content: `${styleBlock}\n\n## 文章内容\n${articleContent}` },
+      ],
+      temperature: 0.5, purpose: 'layoutAnalyze', signal: options?.signal,
+    }), options?.signal);
+    throwIfAborted(options?.signal);
+    styleAnalysis = analyzeResp.content;
   }
-
-  // ── Pass 2: Generate HTML (with retry) ──
-  let html = '';
-  let review: LayoutReview = {
-    dimensions: { readingExperience: 'warn', visualStructure: 'warn', memorability: 'warn' },
-    issues: [],
-    passed: false,
-    overallFeedback: 'Agent 未返回排版',
+  const userContent = [
+    '请为以下文章生成完整排版 HTML。', styleBlock,
+    styleAnalysis ? `## 风格分析\n${styleAnalysis}` : '',
+    '## 文章内容', articleContent,
+    '请输出自审结果和完整 HTML，以 <section data-role="outer"> 开始。',
+  ].filter(Boolean).join('\n');
+  const result = await runAgent<{ html: string; review: LayoutReview }>({
+    ...options,
+    maxTurns: MAX_RETRIES + 1,
+    request: {
+      messages: [
+        { role: 'system', content: templates.layoutAgentPrompt },
+        { role: 'user', content: userContent },
+      ],
+      temperature: 0.7, purpose: 'layoutGeneration',
+    },
+    evaluate: content => {
+      const html = extractHtmlFromResponse(content);
+      const problems = validateLayoutHtml(html);
+      const review = parseSelfReview(content);
+      return {
+        value: problems.length ? undefined : { html, review },
+        done: !problems.length && !Object.values(review.dimensions).includes('fail'),
+        feedback: problems.length
+          ? `HTML 检查发现：${problems.join('；')}。请修复并输出自审与完整 HTML。`
+          : `上版自审：${review.overallFeedback}。请针对 fail 项修改，保留文章原文与其他样式，输出完整 HTML。`,
+      };
+    },
+  });
+  if (!result.value) throw new Error('未能生成有效排版，已保留现有内容，请重试');
+  if (result.termination !== 'completed') {
+    result.value.review.passed = false;
+    result.value.review.overallFeedback = result.feedback || '自动修改达到轮次上限，请人工检查';
+  }
+  return {
+    html: result.value.html.replace(/__PLACEHOLDER_IMG__/g, PLACEHOLDER_IMG_DATA_URI),
+    review: result.value.review,
+    fixRounds: Math.max(0, result.turns - 1),
+    termination: result.termination,
   };
-  let fixRounds = 0;
-
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const userContent = [
-      '请为以下文章生成完整排版 HTML。',
-      '',
-      styleBlock,
-      '',
-      styleAnalysis ? `## 风格分析\n${styleAnalysis}` : '',
-      '',
-      '## 文章内容',
-      articleContent,
-      '',
-      '请直接输出完整 HTML，以 <section data-role="outer"> 开始。',
-    ].filter((l) => l !== '').join('\n');
-
-    try {
-      const response = await callAI({
-        messages: [
-          { role: 'system', content: LAYOUT_AGENT_SYSTEM_PROMPT },
-          { role: 'user', content: userContent },
-        ],
-        temperature: 0.7,
-        purpose: 'layoutGeneration',
-      });
-
-      const content = response.content;
-      const extracted = extractHtmlFromResponse(content);
-      console.log(`[layoutAgent] Pass 2 attempt ${attempt + 1}: responseLen=${content.length}, extracted=${extracted.length > 0}`);
-
-      if (extracted) {
-        html = extracted;
-        review = parseSelfReview(content);
-
-        // If self-review passes or warns (not fail), accept it
-        if (review.dimensions.readingExperience !== 'fail' &&
-            review.dimensions.visualStructure !== 'fail') {
-          console.log('[layoutAgent] Layout accepted — self-review:', review.overallFeedback);
-          break;
-        }
-
-        // Self-review says fail — retry with feedback
-        console.log('[layoutAgent] Self-review indicates fail, retrying...');
-        fixRounds++;
-        styleAnalysis = `上次自审反馈：${review.overallFeedback}\n请针对性地改进。`;
-      } else {
-        // No HTML extracted — retry
-        console.warn('[layoutAgent] No HTML extracted, retrying...');
-        fixRounds++;
-        styleAnalysis = '上次未输出有效 HTML。请务必输出完整的 <section data-role="outer">...</section>。';
-      }
-    } catch (err) {
-      console.error('[layoutAgent] Generation call failed:', err);
-      fixRounds++;
-    }
-  }
-
-  // Fallback if all attempts failed
-  if (!html) {
-    console.warn('[layoutAgent] All attempts failed, using fallback. articleContent preview:', articleContent.substring(0, 200));
-    html = [
-      '<section data-role="outer" style="width:100%;max-width:640px;margin:0 auto;padding:16px;box-sizing:border-box;">',
-      `  <section style="border:2px solid ${spec.primaryColor};padding:20px;background:#fff;">`,
-      `    <div style="font-size:15px;line-height:2;color:#333;">${articleContent.replace(/\n/g, '<br/>')}</div>`,
-      '  </section>',
-      '</section>',
-    ].join('\n');
-
-    review = {
-      dimensions: { readingExperience: 'warn', visualStructure: 'warn', memorability: 'warn' },
-      issues: [{
-        dimension: 'visualStructure',
-        severity: 'important',
-        message: '排版 Agent 未能生成 HTML，使用降级排版',
-        fixHint: '请重试',
-      }],
-      passed: false,
-      overallFeedback: '排版失败，使用降级方案',
-    };
-  }
-
-  html = html.replace(/__PLACEHOLDER_IMG__/g, PLACEHOLDER_IMG_DATA_URI);
-
-  return { html, review, fixRounds };
 }
 
 export async function refineLayout(
@@ -212,6 +172,7 @@ export async function refineLayout(
   feedback: string,
   spec: StyleSpec,
   direction: LayoutDirection,
+  options: AgentRunOptions = {},
 ): Promise<LayoutAgentResult> {
   const styleBlock = buildStylePrompt(spec, direction);
 
@@ -241,23 +202,27 @@ export async function refineLayout(
       ],
       temperature: 0.3,
       purpose: 'layoutGeneration',
+      signal: options.signal,
     });
 
     const extracted = extractHtmlFromResponse(response.content);
-    if (extracted) {
+    throwIfAborted(options.signal);
+    if (extracted && validateLayoutHtml(extracted).length === 0) {
       const cleaned = extracted.replace(/__PLACEHOLDER_IMG__/g, PLACEHOLDER_IMG_DATA_URI);
       return {
         html: cleaned,
         review: {
-          dimensions: { readingExperience: 'pass', visualStructure: 'pass', memorability: 'warn' },
+          dimensions: { readingExperience: 'warn', visualStructure: 'pass', memorability: 'warn' },
           issues: [],
-          passed: true,
-          overallFeedback: '局部精修完成',
+          passed: false,
+          overallFeedback: '局部精修已生成，请检查修改效果',
         },
         fixRounds: 0,
       };
     }
   } catch (err) {
+    throwIfAborted(options.signal);
+    if (isAbortError(err)) throw err;
     console.warn('[refineLayout] AI call failed:', err);
   }
 
@@ -278,7 +243,7 @@ export async function refineLayout(
   };
 }
 
-export async function classifyFeedbackIntent(feedback: string): Promise<'refine' | 'redo'> {
+export async function classifyFeedbackIntent(feedback: string, signal?: AbortSignal): Promise<'refine' | 'redo'> {
   try {
     const response = await callAI({
       messages: [
@@ -294,6 +259,7 @@ export async function classifyFeedbackIntent(feedback: string): Promise<'refine'
         { role: 'user', content: feedback },
       ],
       temperature: 0.1,
+      signal,
       purpose: 'general',
     });
 
@@ -304,7 +270,9 @@ export async function classifyFeedbackIntent(feedback: string): Promise<'refine'
       if (parsed.action === 'redo') return 'redo';
     }
     return 'refine';
-  } catch {
+  } catch (error) {
+    throwIfAborted(signal);
+    if (isAbortError(error)) throw error;
     return 'refine';
   }
 }

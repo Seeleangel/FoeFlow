@@ -63,7 +63,7 @@ describe('useArticlePipeline', () => {
     expect(result.current.articleDirections).toHaveLength(3)
   })
 
-  test('launchArticlePipeline provides fallback directions when AI returns empty array', async () => {
+  test('launchArticlePipeline repairs an empty directions array before publishing', async () => {
     mockedCallAI.mockResolvedValueOnce({
       content: JSON.stringify({
         spec: { articleType: '新闻稿', tone: '正式', structure: '总分总', presentation: '图文结合', keywords: [], reasoning: '' },
@@ -77,7 +77,7 @@ describe('useArticlePipeline', () => {
       await result.current.launchArticlePipeline('测试内容', '对话历史')
     })
 
-    // Fallback directions are provided, so we go to styleConfirm, not null
+    // The second validated response repairs the first invalid result.
     expect(result.current.articleStage).toBe('styleConfirm')
     expect(result.current.articleDirections.length).toBeGreaterThan(0)
   })
@@ -144,5 +144,35 @@ describe('useArticlePipeline', () => {
 
     expect(onGenerated1).not.toHaveBeenCalled()
     expect(onGenerated2).toHaveBeenCalledWith('# 测试文章\n\n正文内容', expect.anything(), 0)
+  })
+
+  test('cancelled analysis cannot resurrect its style panel after a late response', async () => {
+    let resolve!: (value: { content: string }) => void
+    mockedCallAI.mockImplementationOnce(() => new Promise(r => { resolve = r }))
+    const { result } = renderHook(() => useArticlePipeline({ onArticleGenerated: vi.fn() }))
+    let pending!: Promise<void>
+    act(() => { pending = result.current.launchArticlePipeline('旧素材', '历史') })
+    act(() => result.current.cancelArticlePipeline())
+    await act(async () => { await pending })
+    await act(async () => { resolve({ content: '{}' }); await Promise.resolve() })
+    expect(result.current.articleStage).toBeNull()
+    expect(result.current.articleSpec).toBeNull()
+    expect(result.current.articlePipelineLoading).toBe(false)
+  })
+
+  test('cancelled generation aborts its signal and cannot publish a late draft', async () => {
+    let resolve!: (value: unknown) => void
+    mockedRunAgent.mockImplementationOnce(() => new Promise(r => { resolve = r }))
+    const onGenerated = vi.fn()
+    const { result } = renderHook(() => useArticlePipeline({ onArticleGenerated: onGenerated }))
+    await act(async () => { await result.current.launchArticlePipeline('素材', '历史') })
+    let pending!: Promise<void>
+    act(() => { pending = result.current.handleArticleDirectionSelect(result.current.articleDirections[0], '历史') })
+    const signal = mockedRunAgent.mock.calls.at(-1)![3].signal as AbortSignal
+    act(() => result.current.cancelArticlePipeline())
+    expect(signal.aborted).toBe(true)
+    await act(async () => { resolve({ article: '旧草稿', review: {}, fixRounds: 0 }); await pending })
+    expect(onGenerated).not.toHaveBeenCalled()
+    expect(result.current.articleStage).toBeNull()
   })
 })

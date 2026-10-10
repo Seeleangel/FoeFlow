@@ -91,16 +91,18 @@ describe('runArticleAgent', () => {
   });
 
   // --- Test 3: Agent stops after 8 rounds maximum ---
-  it('stops after 8 rounds even if always says 需要修改', async () => {
+  it('stops unchanged drafts after two calls instead of repeating eight times', async () => {
     vi.mocked(aiModule.callAI).mockResolvedValue({
       content: '需要修改，正在调整。\n\n# 第N版文章\n\n文章内容...',
     });
 
     const result = await runArticleAgent(articleContent, mockDirection, '');
 
-    // Should have called exactly 8 times (MAX_ROUNDS)
-    expect(aiModule.callAI).toHaveBeenCalledTimes(8);
-    expect(result.fixRounds).toBe(8);
+    // An unchanged second draft ends the loop.
+    expect(aiModule.callAI).toHaveBeenCalledTimes(2);
+    expect(result.fixRounds).toBe(1);
+    expect(result.termination).toBe('stalled');
+    expect(result.review.passed).toBe(false);
     // Should still extract the article even though not "final"
     expect(result.article).toContain('# 第N版文章');
   });
@@ -119,16 +121,10 @@ describe('runArticleAgent', () => {
   });
 
   // --- Test 5: Agent handles AI errors gracefully ---
-  it('handles AI errors gracefully', async () => {
+  it('reports a failed request without returning a fabricated article', async () => {
     vi.mocked(aiModule.callAI).mockRejectedValue(new Error('API timeout'));
-
-    // Should not throw
-    const result = await runArticleAgent(articleContent, mockDirection, '');
-
-    expect(result).toBeDefined();
-    expect(result.article).toBeDefined();
-    expect(result.article.length).toBeGreaterThan(0);
-    expect(result.review).toBeDefined();
+    await expect(runArticleAgent(articleContent, mockDirection, '')).rejects.toThrow('API timeout');
+    expect(aiModule.callAI).toHaveBeenCalledTimes(1);
   });
 
   // --- Test 6: Extracts article from last assistant message when loop exceeds ---
@@ -216,5 +212,22 @@ describe('runArticleAgent', () => {
     expect(userContent).toContain(mockDirection.angle);
     expect(userContent).toContain(mockDirection.structure);
     expect(userContent).toContain(mockDirection.tone);
+  });
+
+  it.each(['未通过', '不能定稿', '未能完成', '需要修改'])('does not accept a negated completion: %s', async verdict => {
+    vi.mocked(aiModule.callAI).mockResolvedValue({ content: `${verdict}，30/50分。\n\n# 草稿\n\n待检查的正文。` });
+    const result = await runArticleAgent(articleContent, mockDirection, '');
+    expect(result.review.passed).toBe(false);
+    expect(result.termination).toBe('stalled');
+  });
+
+  it('limits changing revisions to four calls', async () => {
+    let version = 0;
+    vi.mocked(aiModule.callAI).mockImplementation(async () => ({ content: `需要调整，30/50分。\n\n# 版本${++version}\n\n正文。` }));
+    const result = await runArticleAgent(articleContent, mockDirection, '');
+    expect(aiModule.callAI).toHaveBeenCalledTimes(4);
+    expect(result.termination).toBe('limit');
+    expect(result.fixRounds).toBe(3);
+    expect(result.review.passed).toBe(false);
   });
 });

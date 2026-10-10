@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { useAgentRun } from '@/hooks/useAgentRun';
+import { isAbortError, throwIfAborted } from '@/lib/agentRuntime';
+import { parseJsonObject, parseLayoutDirection } from '@/lib/agentValidation';
 import { useArticlePipeline } from '@/hooks/useArticlePipeline';
 import { useLayoutPipeline } from '@/hooks/useLayoutPipeline';
 import { getAllTemplates } from '@/lib/libraryStorage';
@@ -46,6 +49,7 @@ export default function Generator() {
   const [generatedHtml, setGeneratedHtml] = useState('');
   const [generatedTitle, setGeneratedTitle] = useState('');
   const [loading, setLoading] = useState(false);
+  const { begin: beginChatRun, cancel: cancelChatRun } = useAgentRun();
   const [layoutStrategy, setLayoutStrategy] = useState<LayoutStrategy | null>(null);
   const [layoutHtml, setLayoutHtml] = useState<string>('');
   const [layoutFeedbackState, setLayoutFeedbackState] = useState<LayoutFeedbackState>('idle');
@@ -57,13 +61,16 @@ export default function Generator() {
     articleReview,
     articleFixRounds,
     articlePipelineLoading,
+    articleProgress,
     setArticleStage,
     launchArticlePipeline,
     handleArticleDirectionSelect,
     cancelArticlePipeline,
   } = useArticlePipeline({
-    onArticleGenerated: (article, _review, fixRounds) => {
+    onArticleGenerated: (article, review, fixRounds) => {
+      const targetSession = sessionRef.current;
       generateResultFromText(article).then(async () => {
+        if (targetSession !== sessionRef.current) return;
         const articleMsg: ChatMessage = {
           role: 'assistant',
           content: article,
@@ -71,8 +78,8 @@ export default function Generator() {
         };
         setChatMessages((prev) => [...prev, articleMsg]);
         showToast(
-          `文章生成完成${fixRounds > 0 ? `（自动优化 ${fixRounds} 轮）` : ''}`,
-          'success'
+          `文章已生成${review.passed ? '' : '，请检查自审未通过的内容'}${fixRounds > 0 ? `（修改 ${fixRounds} 轮）` : ''}`,
+          review.passed ? 'success' : 'warning'
         );
         // Auto-trigger layout pipeline
         autoLayoutRef.current = true;
@@ -85,6 +92,8 @@ export default function Generator() {
   });
   const {
     layoutStage,
+    layoutProgress,
+    cancelLayoutPipeline,
     styleSpec,
     layoutDirections,
     selectedDirection,
@@ -98,12 +107,12 @@ export default function Generator() {
     handleRefineLayout,
     setSelectedDirection,
   } = useLayoutPipeline({
-    onLayoutGenerated: (html, strategy, fixRounds) => {
+    onLayoutGenerated: (html, strategy, fixRounds, review) => {
       setLayoutHtml(html);
       setLayoutStrategy(strategy);
       showToast(
-        `智能排版完成${fixRounds > 0 ? `（自动优化 ${fixRounds} 轮）` : ''}`,
-        'success'
+        `排版已生成${review?.passed === false ? '，请检查效果' : ''}${fixRounds > 0 ? `（修改 ${fixRounds} 轮）` : ''}`,
+        review?.passed === false ? 'warning' : 'success'
       );
     },
     onError: (message) => showToast(message, 'error'),
@@ -188,7 +197,13 @@ export default function Generator() {
     await saveGeneratorSession(currentId, state).catch(console.error);
   };
 
+  const stopAllTasks = () => {
+    cancelChatRun(); cancelArticlePipeline(); cancelLayoutPipeline();
+    setLoading(false); setLayoutFeedbackState('idle');
+  };
+
   const handleNewSession = async () => {
+    stopAllTasks();
     await flushSave();
     const newId = `generator_${Date.now()}`;
     setSession(newId);
@@ -210,6 +225,7 @@ export default function Generator() {
       setShowHistory(false);
       return;
     }
+    stopAllTasks();
     await flushSave();
     const loaded = await loadGeneratorSession(sessionId);
     if (loaded) {
@@ -270,33 +286,22 @@ export default function Generator() {
   };
 
   const handleChatSend = async () => {
+    if (loading || articlePipelineLoading || layoutStage === 'generating' || specLoading) return;
     const rawText = chatInput.trim() || lastUserInputRef.current;
     if (!rawText) return;
-    const text = rawText;
-    lastUserInputRef.current = text;
-    setChatError(null);
+    const chatRun = beginChatRun();
+    try {
+      const text = rawText;
+      lastUserInputRef.current = text;
+      setChatError(null);
 
-    // Intercept layout feedback messages (before template check)
-    if (layoutFeedbackState === 'awaitingFeedback') {
-      const newUserMessage: ChatMessage = { role: 'user', content: text, timestamp: new Date() };
-      setChatMessages((prev) => [...prev, newUserMessage]);
-      setChatInput('');
+      // Intercept layout feedback messages (before template check)
+      if (layoutFeedbackState === 'awaitingFeedback') {
+        const newUserMessage: ChatMessage = { role: 'user', content: text, timestamp: new Date() };
+        setChatMessages((prev) => [...prev, newUserMessage]);
+        setChatInput('');
 
-      if (text.trim() === '全都不满意') {
-        setLayoutFeedbackState('awaitingDirection');
-        const directionMsg: ChatMessage = {
-          role: 'assistant',
-          content: '想要什么感觉？比如更活泼、更正式、更简约……请描述一下你期望的风格方向。',
-          timestamp: new Date(),
-        };
-        setChatMessages((prev) => [...prev, directionMsg]);
-        return;
-      }
-
-      setLoading(true);
-      try {
-        const intent = await classifyFeedbackIntent(text);
-        if (intent === 'redo') {
+        if (text.trim() === '全都不满意') {
           setLayoutFeedbackState('awaitingDirection');
           const directionMsg: ChatMessage = {
             role: 'assistant',
@@ -304,96 +309,120 @@ export default function Generator() {
             timestamp: new Date(),
           };
           setChatMessages((prev) => [...prev, directionMsg]);
-        } else {
-          if (!layoutHtml) {
-            showToast('请先生成排版后再修改', 'warning');
-            setLayoutFeedbackState('idle');
-            setLoading(false);
-            return;
-          }
-          if (!styleSpecRef.current || !selectedDirectionRef.current) {
-            showToast('请先点击「智能排版」生成排版后再修改', 'warning');
-            setLayoutFeedbackState('idle');
-            setLoading(false);
-            return;
-          }
-          setLayoutFeedbackState('processing');
-          await handleRefineLayout(layoutHtml, text, styleSpecRef.current, selectedDirectionRef.current);
-          setLayoutFeedbackState('idle');
-          const doneMsg: ChatMessage = {
-            role: 'assistant',
-            content: '已根据你的反馈调整排版，请在右侧预览查看。',
-            timestamp: new Date(),
-          };
-          setChatMessages((prev) => [...prev, doneMsg]);
-        }
-      } catch (err) {
-        showToast('处理反馈失败：' + String(err), 'error');
-        setLayoutFeedbackState('idle');
-      } finally {
-        setLoading(false);
-      }
-      return;
-    }
-
-    if (layoutFeedbackState === 'awaitingDirection') {
-      const newUserMessage: ChatMessage = { role: 'user', content: text, timestamp: new Date() };
-      setChatMessages((prev) => [...prev, newUserMessage]);
-      setChatInput('');
-
-      setLoading(true);
-      await handleFullRedoDirection(text);
-      setLoading(false);
-      return;
-    }
-
-    // Normal flow requires template
-    if (!selectedTemplate || loading || articlePipelineLoading) return;
-
-    const newUserMessage: ChatMessage = { role: 'user', content: text, timestamp: new Date() };
-    const newMessages = [...chatMessages, newUserMessage];
-    setChatMessages(newMessages);
-    setChatInput('');
-    setLoading(true);
-
-    try {
-      const result = await gatherRequirements(newMessages);
-
-      if (result.type === 'ready') {
-        if (articleStage) {
-          showToast('已有文章生成任务进行中，请先取消当前任务', 'warning');
           return;
         }
 
-        const transitionMsg: ChatMessage = {
-          role: 'assistant',
-          content: result.content,
-          timestamp: new Date(),
-        };
-        const messagesWithTransition = [...newMessages, transitionMsg];
-        setChatMessages(messagesWithTransition);
-
-        const pipelineHistory = messagesWithTransition
-          .map((m) => `${m.role === 'user' ? '用户' : 'AI'}：${m.content}`)
-          .join('\n');
-        await launchArticlePipeline(text, pipelineHistory);
+        setLoading(true);
+        try {
+          const intent = await classifyFeedbackIntent(text, chatRun.signal);
+          if (!chatRun.isCurrent()) return;
+          if (intent === 'redo') {
+            setLayoutFeedbackState('awaitingDirection');
+            const directionMsg: ChatMessage = {
+              role: 'assistant',
+              content: '想要什么感觉？比如更活泼、更正式、更简约……请描述一下你期望的风格方向。',
+              timestamp: new Date(),
+            };
+            setChatMessages((prev) => [...prev, directionMsg]);
+          } else {
+            if (!layoutHtml) {
+              showToast('请先生成排版后再修改', 'warning');
+              setLayoutFeedbackState('idle');
+              setLoading(false);
+              return;
+            }
+            if (!styleSpecRef.current || !selectedDirectionRef.current) {
+              showToast('请先点击「智能排版」生成排版后再修改', 'warning');
+              setLayoutFeedbackState('idle');
+              setLoading(false);
+              return;
+            }
+            setLayoutFeedbackState('processing');
+            const updated = await handleRefineLayout(layoutHtml, text, styleSpecRef.current, selectedDirectionRef.current);
+            if (!chatRun.isCurrent()) return;
+            if (!updated) { setLayoutFeedbackState('awaitingFeedback'); return; }
+            setLayoutFeedbackState('idle');
+            const doneMsg: ChatMessage = {
+              role: 'assistant',
+              content: '已根据你的反馈调整排版，请在右侧预览查看。',
+              timestamp: new Date(),
+            };
+            setChatMessages((prev) => [...prev, doneMsg]);
+          }
+        } catch (err) {
+        if (!chatRun.isCurrent() || isAbortError(err)) return;
+          showToast('处理反馈失败：' + String(err), 'error');
+          setLayoutFeedbackState('idle');
+        } finally {
+          if (chatRun.isCurrent()) setLoading(false);
+        }
         return;
       }
 
-      // Question — display in chat
-      const parts = splitAiResponse(result.content);
-      const assistantMessages: ChatMessage[] = parts.map((content, i) => ({
-        role: 'assistant',
-        content,
-        timestamp: new Date(Date.now() + i),
-      }));
-      setChatMessages([...newMessages, ...assistantMessages]);
-    } catch (err) {
-      const errorMsg = String(err);
-      showToast(errorMsg, 'error');
-      setChatError(errorMsg);
+      if (layoutFeedbackState === 'awaitingDirection') {
+        const newUserMessage: ChatMessage = { role: 'user', content: text, timestamp: new Date() };
+        setChatMessages((prev) => [...prev, newUserMessage]);
+        setChatInput('');
+
+        setLoading(true);
+        await handleFullRedoDirection(text, chatRun.signal);
+        if (!chatRun.isCurrent()) return;
+        setLoading(false);
+        return;
+      }
+
+      // Normal flow requires template
+      if (!selectedTemplate || loading || articlePipelineLoading) return;
+
+      const newUserMessage: ChatMessage = { role: 'user', content: text, timestamp: new Date() };
+      const newMessages = [...chatMessages, newUserMessage];
+      setChatMessages(newMessages);
+      setChatInput('');
+      setLoading(true);
+
+      try {
+        const result = await gatherRequirements(newMessages, chatRun.signal);
+
+        if (!chatRun.isCurrent()) return;
+        if (result.type === 'ready') {
+          if (articleStage) {
+            showToast('已有文章生成任务进行中，请先取消当前任务', 'warning');
+            return;
+          }
+
+          const transitionMsg: ChatMessage = {
+            role: 'assistant',
+            content: result.content,
+            timestamp: new Date(),
+          };
+          const messagesWithTransition = [...newMessages, transitionMsg];
+          setChatMessages(messagesWithTransition);
+
+          const pipelineHistory = messagesWithTransition
+            .map((m) => `${m.role === 'user' ? '用户' : 'AI'}：${m.content}`)
+            .join('\n');
+          await launchArticlePipeline(result.collectedInfo?.materials || text, pipelineHistory);
+          return;
+        }
+
+        // Question — display in chat
+        const parts = splitAiResponse(result.content);
+        const assistantMessages: ChatMessage[] = parts.map((content, i) => ({
+          role: 'assistant',
+          content,
+          timestamp: new Date(Date.now() + i),
+        }));
+        setChatMessages([...newMessages, ...assistantMessages]);
+      } catch (err) {
+        if (!chatRun.isCurrent() || isAbortError(err)) return;
+        const errorMsg = String(err);
+        showToast(errorMsg, 'error');
+        setChatError(errorMsg);
+      } finally {
+        if (chatRun.isCurrent()) setLoading(false);
+      }
     } finally {
-      setLoading(false);
+      if (chatRun.isCurrent()) { setLoading(false); chatRun.finish(); }
     }
   };
 
@@ -423,6 +452,7 @@ export default function Generator() {
     const hasContent = chatMessages.length > 0 || generatedText.length > 0;
     if (!hasContent) return;
 
+    const currentId = session;
     const timer = setTimeout(() => {
       const state: GeneratorSessionState = {
         messages: chatMessages.map((m) => ({
@@ -439,12 +469,12 @@ export default function Generator() {
         selectedDirectionJson: selectedDirection ? JSON.stringify(selectedDirection) : '',
         selectedTemplateId: selectedId,
       };
-      saveGeneratorSession(sessionRef.current, state)
+      saveGeneratorSession(currentId, state)
         .then(() => {
           setSessions((prev) => {
-            const filtered = prev.filter((s) => s.id !== sessionRef.current);
+            const filtered = prev.filter((s) => s.id !== currentId);
             return [
-              { id: sessionRef.current, title: generatedTitle || '未命名生成', updatedAt: Date.now() },
+              { id: currentId, title: generatedTitle || '未命名生成', updatedAt: Date.now() },
               ...filtered,
             ];
           });
@@ -453,7 +483,7 @@ export default function Generator() {
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [chatMessages, chatInput, generatedText, generatedHtml, generatedTitle, layoutStrategy, layoutHtml, selectedId]);
+  }, [chatMessages, chatInput, generatedText, generatedHtml, generatedTitle, layoutStrategy, layoutHtml, selectedId, styleSpec, selectedDirection, session]);
 
   const flushRef = useRef({ chatMessages, chatInput, generatedText, generatedHtml, generatedTitle, layoutHtml, layoutStrategy, styleSpec, selectedDirection, selectedId });
   flushRef.current = { chatMessages, chatInput, generatedText, generatedHtml, generatedTitle, layoutHtml, layoutStrategy, styleSpec, selectedDirection, selectedId };
@@ -482,7 +512,6 @@ export default function Generator() {
       };
       saveGeneratorSession(currentId, state).catch(console.error);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const [chatError, setChatError] = useState<string | null>(null);
@@ -548,7 +577,7 @@ export default function Generator() {
     }
   };
 
-  const handleFullRedoDirection = async (directionDesc: string) => {
+  const handleFullRedoDirection = async (directionDesc: string, signal?: AbortSignal) => {
     const spec = styleSpecRef.current;
     if (!spec) return;
     setLayoutFeedbackState('processing');
@@ -584,19 +613,15 @@ export default function Generator() {
         ],
         temperature: 0.5,
         purpose: 'general',
+        signal,
       });
 
-      let cleaned = response.content.trim();
-      cleaned = cleaned.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
-      const bracket = cleaned.indexOf('{');
-      if (bracket > 0) cleaned = cleaned.substring(bracket);
-      const lastBracket = cleaned.lastIndexOf('}');
-      if (lastBracket > 0 && lastBracket < cleaned.length - 1) cleaned = cleaned.substring(0, lastBracket + 1);
+      throwIfAborted(signal);
+      const newDirection = parseLayoutDirection(parseJsonObject(response.content));
 
-      const newDirection = JSON.parse(cleaned) as LayoutDirection;
+      const result = await runLayoutAgent(generatedText, spec, newDirection, { skipAnalyze: true, signal });
 
-      const result = await runLayoutAgent(generatedText, spec, newDirection, { skipAnalyze: true });
-
+      throwIfAborted(signal);
       const strategy: LayoutStrategy = {
         articleType: spec.articleType as LayoutStrategy['articleType'],
         style: newDirection.name,
@@ -620,8 +645,9 @@ export default function Generator() {
         timestamp: new Date(),
       };
       setChatMessages((prev) => [...prev, doneMsg]);
-      showToast('排版已重新生成', 'success');
+      showToast(result.review.passed ? '排版已重新生成' : '排版已生成，请检查效果', result.review.passed ? 'success' : 'warning');
     } catch (err) {
+      if (signal?.aborted || isAbortError(err)) return;
       showToast('重新排版失败：' + String(err), 'error');
       setLayoutFeedbackState('idle');
     }
@@ -671,6 +697,12 @@ export default function Generator() {
           <div>
             <h1 className="text-3xl font-bold text-stone-900 tracking-tight mb-2">文章生成器</h1>
             <p className="text-base text-stone-500">选择风格模板，快速生成或对话共创推文内容</p>
+            {(loading || articlePipelineLoading || specLoading || layoutStage === 'generating') && (
+              <div className="mt-3 flex items-center gap-3 text-sm" role="status">
+                <span className="text-stone-500">{articleProgress || layoutProgress || '正在整理需求'}</span>
+                <button type="button" onClick={stopAllTasks} className="text-red-600 hover:underline">停止生成</button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -684,7 +716,7 @@ export default function Generator() {
                 messages={chatMessages}
                 inputValue={chatInput}
                 loading={loading}
-                pipelineLoading={articlePipelineLoading}
+                pipelineLoading={articlePipelineLoading || specLoading || layoutStage === 'generating'}
                 showHistory={showHistory}
                 sessions={sessions}
                 currentSessionId={session}
@@ -709,7 +741,7 @@ export default function Generator() {
               articleFixRounds={articleFixRounds}
               onArticleSpecConfirm={handleArticleSpecConfirm}
               onArticleDirectionSelect={handlePreviewArticleDirectionSelect}
-              onArticleCancel={cancelArticlePipeline}
+              onArticleCancel={stopAllTasks}
               onArticleAdjustStyle={handlePreviewArticleAdjustStyle}
               onArticleBackToStyle={handleArticleBackToStyle}
               layoutStage={layoutStage}

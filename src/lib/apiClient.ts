@@ -1,5 +1,4 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
-import { invoke } from '@tauri-apps/api/core';
 import { loadSettings } from './settingsStorage';
 
 export interface ChatMessage {
@@ -7,207 +6,70 @@ export interface ChatMessage {
   content: string;
 }
 
+const API_TIMEOUT_MS = 120000;
+
 function isTauriEnv(): boolean {
   return typeof window !== 'undefined' && !!((window as unknown) as Record<string, unknown>).__TAURI_INTERNALS__;
 }
 
-async function invokeHttpRequest(
-  url: string,
-  options: { method: string; headers: Record<string, string>; body: string }
-): Promise<{ status: number; body: string }> {
-  console.log('[invokeHttpRequest] called with url=', url, 'method=', options.method);
-  if (!isTauriEnv()) {
-    throw new Error('Tauri 环境未就绪，无法发送请求');
-  }
-
-  try {
-    const rawResponse = await invoke<unknown>('invoke_http_request', {
-      url,
-      method: options.method,
-      headers: options.headers,
-      body: options.body,
-    });
-    console.log('[invokeHttpRequest] raw response:', rawResponse, 'type:', typeof rawResponse);
-    const response = rawResponse as { status: number; body: string } | null;
-    if (!response || typeof response !== 'object') {
-      throw new Error(`invoke 返回了无效的响应格式：${JSON.stringify(rawResponse)}`);
-    }
-    if (typeof response.status !== 'number' || typeof response.body !== 'string') {
-      throw new Error(`响应字段类型错误：status=${typeof response.status}, body=${typeof response.body}`);
-    }
-    return response;
-  } catch (err) {
-    console.error('[invokeHttpRequest] ERROR:', err);
-    throw err;
-  }
-}
-
-async function nativeFetch(
-  url: string,
-  options: { method: string; headers: Record<string, string>; body: string }
-): Promise<{ status: number; body: string }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-  try {
-    const response = await fetch(url, {
-      method: options.method,
-      headers: options.headers,
-      body: options.body,
-      signal: controller.signal,
-    });
-    const body = await response.text();
-    return { status: response.status, body };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function tauriPluginFetch(
-  url: string,
-  options: { method: string; headers: Record<string, string>; body: string }
-): Promise<{ status: number; body: string }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-  try {
-    const response = await tauriFetch(url, {
-      method: options.method,
-      headers: options.headers,
-      body: options.body,
-      signal: controller.signal,
-    });
-    const body = await response.text();
-    return { status: response.status, body };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function proxyFetch(
   url: string,
-  options: { method: string; headers: Record<string, string>; body: string }
+  options: { method: string; headers: Record<string, string>; body: string },
+  signal?: AbortSignal,
 ): Promise<{ status: number; body: string }> {
-  const failures: string[] = [];
-
-  // Diagnostic: test basic invoke
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) controller.abort();
+  const timeout = setTimeout(abort, API_TIMEOUT_MS);
   try {
-    const version = await invoke<string>('plugin:app|version');
-    console.log('[proxyFetch] invoke diagnostic - app version:', version);
-  } catch (e) {
-    console.warn('[proxyFetch] invoke diagnostic failed:', e);
-    failures.push(`invoke diagnostic: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
-  // Strategy 1: native fetch (works in production Tauri WebView, CORS-blocked in dev browser)
-  try {
-    console.log('[proxyFetch] trying native fetch...');
-    const result = await nativeFetch(url, options);
-    console.log('[proxyFetch] native fetch succeeded, status:', result.status);
-    return result;
-  } catch (nativeErr) {
-    const msg = nativeErr instanceof Error ? nativeErr.message : String(nativeErr);
-    console.warn('[proxyFetch] native fetch failed:', msg);
-    failures.push(`native fetch: ${msg}`);
-  }
-
-  // Strategy 2: tauri plugin fetch (official Tauri HTTP plugin, has AbortController, most reliable)
-  try {
-    console.log('[proxyFetch] trying tauri plugin fetch...');
-    const result = await tauriPluginFetch(url, options);
-    console.log('[proxyFetch] tauri plugin fetch succeeded, status:', result.status);
-    return result;
-  } catch (pluginErr) {
-    const msg = pluginErr instanceof Error ? pluginErr.message : String(pluginErr);
-    console.warn('[proxyFetch] tauri plugin fetch failed:', msg);
-    failures.push(`tauri plugin fetch: ${msg}`);
-  }
-
-  // Strategy 3: custom invoke command (last resort, full timeout — layout generation may need 60s+)
-  try {
-    console.log('[proxyFetch] trying custom invoke...');
-    const result = await withTimeout(
-      invokeHttpRequest(url, options),
-      API_TIMEOUT_MS,
-      'custom invoke'
-    );
-    console.log('[proxyFetch] custom invoke succeeded, status:', result.status);
-    return result;
-  } catch (invokeErr) {
-    const msg = invokeErr instanceof Error ? invokeErr.message : String(invokeErr);
-    console.warn('[proxyFetch] custom invoke failed:', msg);
-    failures.push(`custom invoke: ${msg}`);
-  }
-
-  throw new Error(
-    `所有请求方式均已失败：\n${failures.map((f) => '  - ' + f).join('\n')}`
-  );
-}
-
-const API_TIMEOUT_MS = 120000; // 120-second timeout for all API calls
-
-async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(`${label} 请求超时（${ms / 1000}秒）`)), ms);
-  });
-  try {
-    const result = await Promise.race([promise, timeout]);
-    return result;
+    // Select once before sending. Retrying a timed-out POST via another adapter can
+    // generate duplicate paid requests while the original is still running.
+    const adapter = isTauriEnv() ? tauriFetch : fetch;
+    const response = await adapter(url, { ...options, signal: controller.signal });
+    const body = await response.text();
+    if (controller.signal.aborted) throw new DOMException('请求已取消', 'AbortError');
+    return { status: response.status, body };
+  } catch (error) {
+    if (signal?.aborted) throw new DOMException('任务已停止', 'AbortError');
+    if (controller.signal.aborted) throw new Error('AI 请求超过 120 秒，请稍后重试');
+    throw error;
   } finally {
-    if (timeoutId) clearTimeout(timeoutId);
+    clearTimeout(timeout);
+    signal?.removeEventListener('abort', abort);
   }
 }
 
-export async function callSchoolLLM(messages: ChatMessage[], temperature?: number, maxTokens?: number): Promise<string> {
+export async function callSchoolLLM(
+  messages: ChatMessage[], temperature?: number, maxTokens?: number, signal?: AbortSignal,
+): Promise<string> {
+  if (signal?.aborted) throw new DOMException('任务已停止', 'AbortError');
   const settings = await loadSettings();
+  if (signal?.aborted) throw new DOMException('任务已停止', 'AbortError');
   if (!settings.apiUrl || !settings.apiKey) {
     throw new Error('API 配置不完整，请先在设置中填写');
   }
-
-  console.log('[callSchoolLLM] Requesting:', settings.apiUrl);
-  console.log('[callSchoolLLM] Messages:', messages.length, 'items');
-  console.log('[callSchoolLLM] Model:', settings.modelName || 'default');
-  console.log('[callSchoolLLM] Temperature:', temperature ?? 0.2);
-  console.log('[callSchoolLLM] maxTokens:', maxTokens ?? 'not set');
-  console.log('[callSchoolLLM] isTauriEnv:', isTauriEnv());
-
   const body: Record<string, unknown> = {
-    model: settings.modelName || 'default',
-    messages,
-    temperature: temperature ?? 0.2,
+    model: settings.modelName || 'default', messages, temperature: temperature ?? 0.2,
   };
-  if (maxTokens) {
-    body.max_tokens = maxTokens;
-  }
-  const requestBody = JSON.stringify(body);
-  const requestHeaders = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${settings.apiKey}`,
-  };
-
+  if (maxTokens) body.max_tokens = maxTokens;
   const response = await proxyFetch(settings.apiUrl, {
     method: 'POST',
-    headers: requestHeaders,
-    body: requestBody,
-  });
-
-  console.log('[callSchoolLLM] Response status:', response.status);
-
-  if (response.status !== 200) {
-    console.error('[callSchoolLLM] Error response:', response.body);
-    throw new Error(`API 请求失败：${response.status} ${response.body}`);
-  }
-
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.apiKey}` },
+    body: JSON.stringify(body),
+  }, signal);
+  if (response.status !== 200) throw new Error(`API 请求失败：${response.status}`);
   const data = JSON.parse(response.body) as {
-    choices?: [{ message?: { content?: string } }];
+    choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
     error?: { message?: string };
   };
-
-  if (data.error?.message) {
-    throw new Error(`API 错误：${data.error.message}`);
-  }
-
-  console.log('[callSchoolLLM] Response data:', data);
-  return data.choices?.[0]?.message?.content ?? '';
+  if (data.error?.message) throw new Error(`API 错误：${data.error.message}`);
+  const choice = data.choices?.[0];
+  if (choice?.finish_reason === 'length') throw new Error('模型输出被长度限制截断，请缩短素材或提高输出长度设置');
+  if (choice?.finish_reason === 'content_filter') throw new Error('模型未能返回内容，请调整素材后重试');
+  const content = choice?.message?.content;
+  if (typeof content !== 'string' || !content.trim()) throw new Error('模型返回了空内容，请重试');
+  return content;
 }
 
 import { loadPromptTemplates, applyPromptTemplate } from './promptStorage';

@@ -6,7 +6,7 @@ vi.mock('@/lib/ai', () => ({
 }));
 
 // Import agent after mocks are set up
-import { runLayoutAgent, classifyFeedbackIntent, refineLayout } from '@/lib/layoutAgent';
+import { runLayoutAgent, classifyFeedbackIntent, refineLayout, validateLayoutHtml } from '@/lib/layoutAgent';
 import type { StyleSpec, LayoutDirection } from '@/types/layout';
 
 const mockSpec: StyleSpec = {
@@ -64,6 +64,21 @@ const sampleHtmlV2 = `<section data-role="outer" style="width:100%;max-width:640
 
 const analyzeResponse = '本文为活动通知，建议三卡片结构：Banner突出标题和时间、正文卡片承载活动详情、结尾卡片呼吁报名。';
 
+describe('layout artifact validation', () => {
+  it('accepts an inert complete outer container', () => {
+    expect(validateLayoutHtml(sampleHtml)).toEqual([]);
+  });
+  it.each([
+    '<section>缺少外层标记</section>',
+    '<section data-role="outer">未闭合',
+    '<section data-role="outer"><script>alert(1)</script></section>',
+    '<section data-role="outer"><p onclick="run()">正文</p></section>',
+    '<section data-role="outer"><a href="javascript:run()">正文</a></section>',
+  ])('rejects an invalid or active layout: %s', html => {
+    expect(validateLayoutHtml(html).length).toBeGreaterThan(0);
+  });
+});
+
 describe('runLayoutAgent', () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -104,34 +119,28 @@ describe('runLayoutAgent', () => {
   });
 
   // --- Test 3: Stops after MAX_RETRIES (2) ---
-  it('stops after MAX_RETRIES when self-review always says fail', async () => {
+  it('stops when the model repeats an unchanged failed layout', async () => {
     vi.mocked(aiModule.callAI)
       .mockResolvedValueOnce({ content: analyzeResponse })  // analyze
       .mockResolvedValue({ content: failResponse(sampleHtml) }); // all generates fail
 
     const result = await runLayoutAgent(articleContent, mockSpec, mockDirection);
 
-    // analyze + 3 generates (initial + 2 retries) = 4 calls
-    expect(aiModule.callAI).toHaveBeenCalledTimes(4);
-    expect(result.fixRounds).toBe(3);
+    // Analyze + two identical generations; the repeated candidate stops the loop.
+    expect(aiModule.callAI).toHaveBeenCalledTimes(3);
+    expect(result.termination).toBe('stalled');
+    expect(result.fixRounds).toBe(1);
     expect(result.html).toContain('<section data-role="outer"');
     expect(result.review.passed).toBe(false);
   });
 
   // --- Test 4: Handles no HTML in response ---
-  it('handles responses without <section> tags and falls back after retries', async () => {
+  it('rejects missing HTML without replacing the preview with fallback content', async () => {
     vi.mocked(aiModule.callAI)
-      .mockResolvedValueOnce({ content: analyzeResponse })  // analyze
-      .mockResolvedValue({ content: '自审：阅读体验 pass / 视觉结构 pass / 记忆点 pass。排版完成，可以定稿。\n\n这是一段没有HTML标签的普通文本。' });
-
-    const result = await runLayoutAgent(articleContent, mockSpec, mockDirection);
-
-    // Should fall back after retries
-    expect(result.html).toBeDefined();
-    expect(result.html.length).toBeGreaterThan(0);
-    expect(result.html).toContain('data-role="outer"');
-    expect(result.review.passed).toBe(false);
-    expect(result.review.issues.length).toBeGreaterThan(0);
+      .mockResolvedValueOnce({ content: analyzeResponse })
+      .mockResolvedValue({ content: '自审：阅读体验 pass / 视觉结构 pass / 记忆点 pass。没有 HTML。' });
+    await expect(runLayoutAgent(articleContent, mockSpec, mockDirection)).rejects.toThrow('有效排版');
+    expect(aiModule.callAI).toHaveBeenCalledTimes(3);
   });
 
   // --- Test 5: Parses self-review verdicts ---
@@ -189,17 +198,10 @@ ${sampleHtml}`,
   });
 
   // --- Test 8: Handles API errors gracefully ---
-  it('handles callAI errors gracefully and returns fallback HTML', async () => {
+  it('reports API errors without additional generation requests', async () => {
     vi.mocked(aiModule.callAI).mockRejectedValue(new Error('API timeout'));
-
-    const result = await runLayoutAgent(articleContent, mockSpec, mockDirection);
-
-    expect(result).toBeDefined();
-    expect(result.html).toBeDefined();
-    expect(result.html.length).toBeGreaterThan(0);
-    expect(result.html).toContain('data-role="outer"');
-    expect(result.review).toBeDefined();
-    expect(result.review.passed).toBe(false);
+    await expect(runLayoutAgent(articleContent, mockSpec, mockDirection)).rejects.toThrow('API timeout');
+    expect(aiModule.callAI).toHaveBeenCalledTimes(1);
   });
 
   // --- Test 9: Skips analyze pass when skipAnalyze is true ---

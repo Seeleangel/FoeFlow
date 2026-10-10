@@ -1,3 +1,5 @@
+import { parseJsonObject } from './agentValidation';
+import { prepareAgentContext, throwIfAborted } from './agentRuntime';
 import { loadPromptTemplates } from './promptStorage';
 import { callSchoolLLM } from './apiClient';
 import type { ChatMessage } from './apiClient';
@@ -14,16 +16,19 @@ export interface RequirementResult {
 }
 
 export function extractReadyJson(response: string): string | null {
-  const start = response.indexOf('{"status"');
-  if (start === -1) return null;
-
-  let depth = 0;
-  for (let i = start; i < response.length; i++) {
-    if (response[i] === '{') depth++;
-    else if (response[i] === '}') {
-      depth--;
-      if (depth === 0) return response.substring(start, i + 1);
-    }
+  const match = /\{\s*"status"\s*:/.exec(response);
+  if (!match) return null;
+  const tail = response.slice(match.index);
+  let depth = 0, quoted = false, escaped = false;
+  for (let i = 0; i < tail.length; i++) {
+    const char = tail[i];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') quoted = true;
+    else if (char === '{') depth++;
+    else if (char === '}' && --depth === 0) return tail.slice(0, i + 1);
   }
   return null;
 }
@@ -34,6 +39,7 @@ export function extractReadyJson(response: string): string | null {
  */
 export async function gatherRequirements(
   messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  signal?: AbortSignal,
 ): Promise<RequirementResult> {
   const templates = await loadPromptTemplates();
   const systemPrompt = templates.requirementGatheringPrompt;
@@ -48,22 +54,24 @@ export async function gatherRequirements(
 
   let response: string;
   try {
-    response = await callSchoolLLM(requestMessages, 0.7);
+    response = await callSchoolLLM(prepareAgentContext(requestMessages), 0.7, 2048, signal);
   } catch (err) {
     console.error('[requirementAgent] LLM call failed:', err);
     throw err;
   }
 
+  throwIfAborted(signal);
   const jsonStr = extractReadyJson(response);
   if (jsonStr) {
     try {
-      const parsed = JSON.parse(jsonStr);
-      if (parsed.status === 'ready' && parsed.collectedInfo) {
+      const parsed = parseJsonObject(jsonStr);
+      const info = parsed.collectedInfo as Record<string, unknown> | undefined;
+      if (parsed.status === 'ready' && info && ['topic', 'style', 'materials'].every(key => typeof info[key] === 'string') && (parsed.brief === undefined || typeof parsed.brief === 'string')) {
         return {
           type: 'ready',
-          content: response.replace(jsonStr, '').trim() || parsed.brief || '信息收集完成，开始为您生成文章…',
-          brief: parsed.brief,
-          collectedInfo: parsed.collectedInfo,
+          content: response.replace(jsonStr, '').trim() || (parsed.brief as string) || '信息收集完成，开始为您生成文章…',
+          brief: parsed.brief as string | undefined,
+          collectedInfo: info as { topic: string; style: string; materials: string },
         };
       }
     } catch (e) {
