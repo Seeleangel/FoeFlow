@@ -1,3 +1,4 @@
+import { isWebApp } from '@/lib/platform';
 import { useEffect, useState, useCallback } from 'react';
 import { getUnreadEmails, saveEmails, getMaxUid, markEmailAsRead, deduplicateEmails } from '@/lib/emailStorage';
 import { fetchImapEmails } from '@/lib/imapClient';
@@ -64,7 +65,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   }, []);
 
   useEffect(() => {
-    loadEmails();
+    if (!isWebApp) loadEmails();
   }, [loadEmails]);
 
   const handleMarkRead = useCallback(async (id: string) => {
@@ -74,6 +75,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
   /* 轮询邮箱 */
   useEffect(() => {
+    if (isWebApp) return;
     let intervalId: ReturnType<typeof setInterval> | null = null;
 
     async function pollEmails() {
@@ -118,7 +120,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   }, [loadEmails]);
 
   return (
-    <div className="h-full flex flex-col items-center justify-center relative overflow-hidden select-none" style={{ backgroundColor: '#FAF9F6' }}>
+    <div className={`flex flex-col items-center justify-center relative overflow-hidden select-none ${isWebApp ? 'min-h-full py-16' : 'h-full'}`} style={{ backgroundColor: '#FAF9F6' }}>
       {/* 场景色调叠加 */}
       <div className={`absolute inset-0 bg-gradient-to-b ${scene.tint} pointer-events-none`} />
 
@@ -234,13 +236,19 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           }`}
           style={{ transitionDelay: '600ms' }}
         >
-          {!loading && <Blackboard emails={emails} onMarkRead={handleMarkRead} onViewInbox={() => onNavigate('inbox')} />}
+          {isWebApp && (
+            <div className="mt-6 border-y border-stone-200 py-4 text-sm leading-6 text-stone-600">
+              <p>写作、审核、排版与稿件管理</p>
+              <p className="mt-1">稿件保存在此浏览器。使用 AI 前请<button type="button" className="ml-1 text-red-800 underline underline-offset-4" onClick={() => onNavigate('settings')}>配置模型</button>。</p>
+            </div>
+          )}
+          {!isWebApp && !loading && <Blackboard emails={emails} onMarkRead={handleMarkRead} onViewInbox={() => onNavigate('inbox')} />}
         </div>
       </div>
 
       {/* ── 底部快捷入口（教室物品） ── */}
       <div
-        className={`absolute bottom-10 flex gap-8 transition-all duration-700 ${
+        className={`${isWebApp ? 'relative mt-10' : 'absolute bottom-10'} flex gap-8 transition-all duration-700 ${
           mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-3'
         }`}
         style={{ transitionDelay: '700ms' }}
@@ -267,7 +275,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 </span>
               )}
             </div>
-            <span className="text-xs tracking-wider opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+            <span className={`text-xs tracking-wider transition-opacity duration-300 ${isWebApp ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
               {item.label}
             </span>
           </button>

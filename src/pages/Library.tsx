@@ -136,7 +136,7 @@ export default function Library({
   };
 
   return (
-    <div className="p-8 pb-12">
+    <div className="px-5 sm:px-8 pt-8 pb-12">
       {/* 页面标题 */}
       <div
         className="mb-6"
@@ -153,7 +153,7 @@ export default function Library({
       {/* 模式选择 - 滑动分段控制器 */}
       <div
         ref={tabContainerRef}
-        className="relative flex gap-1 mb-6 p-1 bg-stone-100 rounded-lg w-fit"
+        className="relative flex flex-wrap gap-1 mb-6 p-1 bg-stone-100 rounded-lg w-fit"
         style={{
           opacity: mounted ? 1 : 0,
           transform: mounted ? 'translateY(0)' : 'translateY(6px)',
@@ -169,7 +169,7 @@ export default function Library({
           <button
             key={key}
             onClick={() => handleTabChange(key)}
-            className={`relative z-10 px-4 py-2 rounded-md text-sm font-medium transition-colors duration-300 ${
+            className={`relative z-10 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors duration-300 ${
               activeTab === key ? 'text-stone-900' : 'text-stone-600 hover:text-stone-900'
             }`}
           >

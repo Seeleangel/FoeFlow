@@ -1,3 +1,5 @@
+import { compressBrowserImage, isBrowserImage } from '@/lib/browserImage'
+import { isWebApp } from '@/lib/platform'
 import { useState, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 
@@ -6,6 +8,7 @@ export interface CompressFileItem {
   file: File
   status: 'pending' | 'processing' | 'done' | 'failed'
   error?: string
+  output?: Blob
 }
 
 interface CompressTask {
@@ -32,8 +35,7 @@ export function useImageCompressor() {
   const addFiles = useCallback((fileList: FileList | null) => {
     if (!fileList) return
     const newFiles = Array.from(fileList)
-      .filter((f) => f.type.startsWith('image/'))
-      .filter((f) => f.size <= 200 * 1024 * 1024)
+      .filter((f) => isWebApp ? isBrowserImage(f) : f.type.startsWith('image/') && f.size <= 200 * 1024 * 1024)
       .slice(0, 50)
       .map((f) => ({
         id: crypto.randomUUID(),
@@ -64,6 +66,25 @@ export function useImageCompressor() {
     if (files.length === 0) return
     setIsProcessing(true)
     setProgress(0)
+
+    if (isWebApp) {
+      let processed = 0
+      try {
+        for (const file of files.filter((item) => item.status !== 'done')) {
+          setFiles((current) => current.map((item) => item.id === file.id ? { ...item, status: 'processing', error: undefined } : item))
+          try {
+            const output = await compressBrowserImage(file.file)
+            setFiles((current) => current.map((item) => item.id === file.id ? { ...item, status: 'done', output } : item))
+          } catch (error) {
+            setFiles((current) => current.map((item) => item.id === file.id ? { ...item, status: 'failed', error: String(error) } : item))
+          }
+          setProgress(++processed)
+        }
+      } finally {
+        setIsProcessing(false)
+      }
+      return
+    }
 
     let dir = outputDir
     if (!dir) {

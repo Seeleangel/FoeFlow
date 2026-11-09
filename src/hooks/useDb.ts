@@ -1,15 +1,22 @@
 import Database from '@tauri-apps/plugin-sql';
 import { seedBuiltinTemplates } from '@/lib/seedTemplates';
 
-let dbInstance: Database | null = null;
+import { isWebApp } from '@/lib/platform';
 
-export async function getDb(): Promise<Database> {
-  if (!dbInstance) {
-    console.log('[DB] Loading database...');
-    dbInstance = await Database.load('sqlite:foe_publicity.db');
-    console.log('[DB] Database loaded successfully, path:', dbInstance.path);
-  }
-  return dbInstance;
+type WorkspaceDb = Pick<Database, 'select'> & {
+  execute(query: string, bindValues?: unknown[]): Promise<unknown>;
+};
+
+let dbInstance: Promise<WorkspaceDb> | undefined;
+
+export function getDb(): Promise<WorkspaceDb> {
+  return dbInstance ??= (isWebApp
+    ? import('@/lib/browserDb').then(({ openBrowserDb }) => openBrowserDb())
+    : Database.load('sqlite:foe_publicity.db'))
+    .catch((error) => {
+      dbInstance = undefined;
+      throw error;
+    });
 }
 
 export async function initDb(): Promise<void> {

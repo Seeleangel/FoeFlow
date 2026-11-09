@@ -1,3 +1,6 @@
+import { isWebApp } from '@/lib/platform';
+import { safeArticleHtml } from '@/lib/safeArticleHtml';
+import { downloadBlob } from '@/lib/browserImage';
 import { useEffect, useRef, useState } from 'react';
 import { useAgentRun } from '@/hooks/useAgentRun';
 import { isAbortError, throwIfAborted } from '@/lib/agentRuntime';
@@ -151,7 +154,7 @@ export default function Generator() {
           setSelectedId(t[0].id);
         }
 
-        await analyzeArticleStyles();
+        if (!isWebApp) await analyzeArticleStyles();
       } catch (err) {
         console.error('[Generator] Failed to initialize:', err);
       }
@@ -655,8 +658,9 @@ export default function Generator() {
 
   const handleCopyHtml = () => {
     navigator.clipboard
-      .writeText(layoutHtml || generatedHtml)
-      .then(() => showToast('HTML 已复制到剪贴板', 'success'));
+      .writeText(safeArticleHtml(layoutHtml || generatedHtml))
+      .then(() => showToast('HTML 已复制到剪贴板', 'success'))
+      .catch(() => showToast('无法访问剪贴板，请检查浏览器权限', 'error'));
   };
 
   const handleSaveDraft = async () => {
@@ -667,7 +671,7 @@ export default function Generator() {
         templateId: selectedTemplate?.id || '',
         mode: 'generator-draft',
         paramsJson: { title },
-        contentHtml: generatedHtml,
+        contentHtml: safeArticleHtml(layoutHtml || generatedHtml),
         contentText: generatedText,
         createdAt: Date.now(),
       });
@@ -678,25 +682,20 @@ export default function Generator() {
   };
 
   const handleExportWord = async () => {
-    const paragraphs = generatedText.split('\n').filter((p) => p.trim());
+    const paragraphs = generatedText.split('\n').filter((p) => p.trim() && !p.startsWith('# '));
     const title = generatedTitle || selectedTemplate?.name || '未命名文章';
     const blob = await exportToDocx(title, paragraphs);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${title}.docx`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `${title}.docx`);
   };
 
   return (
-    <div className={`h-screen overflow-hidden bg-gradient-to-b from-stone-50 to-white transition-opacity duration-500 ${mounted ? 'opacity-100' : 'opacity-0'}`}>
+    <div className={`${isWebApp ? 'min-h-full lg:h-full lg:flex lg:flex-col' : 'h-screen overflow-hidden'} bg-gradient-to-b from-stone-50 to-white transition-opacity duration-500 ${mounted ? 'opacity-100' : 'opacity-0'}`}>
       {/* 页面标题区域 */}
-      <div className={`max-w-5xl mx-auto px-8 pt-12 pb-8 transition-all duration-500 ease-out ${mounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}>
+      <div className={`max-w-5xl w-full mx-auto px-5 sm:px-8 pt-8 sm:pt-12 pb-6 sm:pb-8 transition-all duration-500 ease-out ${mounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}>
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-3xl font-bold text-stone-900 tracking-tight mb-2">文章生成器</h1>
-            <p className="text-base text-stone-500">选择风格模板，快速生成或对话共创推文内容</p>
+            <p className="text-base text-stone-500">{isWebApp ? '与 AI 一起写稿，或粘贴已有稿件直接排版' : '选择风格模板，快速生成或对话共创推文内容'}</p>
             {(loading || articlePipelineLoading || specLoading || layoutStage === 'generating') && (
               <div className="mt-3 flex items-center gap-3 text-sm" role="status">
                 <span className="text-stone-500">{articleProgress || layoutProgress || '正在整理需求'}</span>
@@ -708,10 +707,10 @@ export default function Generator() {
       </div>
 
       {/* 主内容区域 */}
-      <div className="max-w-5xl mx-auto px-8 pb-6 h-[calc(100vh-8rem)] overflow-hidden">
+      <div className={`max-w-5xl w-full mx-auto pb-6 ${isWebApp ? 'px-5 sm:px-8 lg:flex-1 lg:min-h-0 lg:overflow-hidden' : 'px-8 h-[calc(100vh-8rem)] overflow-hidden'}`}>
         {selectedTemplate && (
-          <div className="grid grid-cols-2 gap-6 h-full">
-            <div className="h-full overflow-hidden">
+          <div className={`grid gap-6 ${isWebApp ? 'grid-cols-1 lg:grid-cols-2 lg:h-full' : 'grid-cols-2 h-full'}`}>
+            <div className={isWebApp ? "h-[28rem] min-w-0 lg:h-full overflow-hidden" : "h-full overflow-hidden"}>
               <ChatPanel
                 messages={chatMessages}
                 inputValue={chatInput}
@@ -730,6 +729,12 @@ export default function Generator() {
                 onToggleHistory={() => setShowHistory((v) => !v)}
                 onGeneratePreview={generateResultFromText}
                 onRetry={handleChatSend}
+                onPreviewInput={isWebApp ? () => {
+                  const text = chatInput.trim();
+                  if (!text) return;
+                  const draft = text.startsWith('# ') ? text : text.includes('\n') ? '# ' + text : '# 未命名稿件\n' + text;
+                  void generateResultFromText(draft);
+                } : undefined}
                 onLayoutTagClick={handleLayoutTagAction}
               />
             </div>

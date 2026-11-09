@@ -1,3 +1,4 @@
+import { safeArticleHtml } from './safeArticleHtml';
 import html2canvas from 'html2canvas';
 
 const VIEWPORT_HEIGHT = 667;
@@ -13,7 +14,7 @@ export async function captureArticleScreenshots(rawHtml: string): Promise<string
 
   const container = document.createElement('div');
   container.style.cssText = 'position:absolute;left:-9999px;top:0;width:375px;';
-  container.innerHTML = html;
+  container.innerHTML = safeArticleHtml(html);
   document.body.appendChild(container);
 
   try {

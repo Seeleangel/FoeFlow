@@ -1,3 +1,5 @@
+import { isWebApp } from '@/lib/platform';
+import { callSchoolLLM } from '@/lib/apiClient';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,7 +17,10 @@ function validateSettings(settings: AppSettings): string[] {
   // API URL validation
   if (settings.apiUrl && settings.apiUrl.trim()) {
     try {
-      new URL(settings.apiUrl.trim());
+      const url = new URL(settings.apiUrl.trim());
+      if (isWebApp && (url.protocol !== 'https:' || url.username || url.password)) {
+        errors.push('网页版需使用不含账号密码的 HTTPS API 地址');
+      }
     } catch {
       errors.push('API 地址格式不正确，请输入有效的 URL（如 https://api.example.com）');
     }
@@ -89,6 +94,7 @@ export default function Settings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     loadSettings()
@@ -103,9 +109,13 @@ export default function Settings() {
       validationErrors.forEach((err) => showToast(err, 'error'));
       return;
     }
-    await saveSettings(settings);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    try {
+      await saveSettings({ ...settings, apiUrl: settings.apiUrl.trim(), apiKey: settings.apiKey.trim(), modelName: settings.modelName.trim() });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {
+      showToast('保存失败，请检查浏览器存储空间', 'error');
+    }
   };
 
   if (loading || !settings) {
@@ -137,8 +147,8 @@ export default function Settings() {
             <Key className="w-5 h-5 text-blue-600" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-stone-900">校内 API 配置</h2>
-            <p className="text-sm text-stone-500">配置学校大模型 API 访问参数</p>
+            <h2 className="text-lg font-semibold text-stone-900">{isWebApp ? '模型配置' : '校内 API 配置'}</h2>
+            <p className="text-sm text-stone-500">{isWebApp ? '支持校内模型和允许浏览器跨域请求的 OpenAI 兼容接口' : '配置学校大模型 API 访问参数'}</p>
           </div>
         </div>
         <div className="space-y-4 p-6 bg-white border border-stone-200 rounded-lg">
@@ -160,7 +170,7 @@ export default function Settings() {
               onChange={(e) => setSettings({ ...settings, apiKey: e.target.value })}
               placeholder="sk-..."
             />
-            <ApiKeyGuide />
+            {isWebApp ? <p className="text-xs leading-relaxed text-stone-500">密钥保存在此浏览器。校内接口经 FoeFlow 转发，其他接口由浏览器直接连接。</p> : <ApiKeyGuide />}
           </div>
           <div className="space-y-2">
             <Label htmlFor="model-name">模型名称</Label>
@@ -174,8 +184,29 @@ export default function Settings() {
         </div>
       </div>
 
+      {isWebApp && (
+        <div className="mb-8 flex flex-wrap items-center gap-3">
+          <Button type="button" variant="outline" disabled={testing || !settings.apiUrl || !settings.apiKey} onClick={async () => {
+            const errors = validateSettings(settings);
+            if (errors.length) { errors.forEach((error) => showToast(error, 'error')); return; }
+            setTesting(true);
+            try {
+              await callSchoolLLM([{ role: 'user', content: '请只回复 OK' }], 0, 16, undefined, {
+                ...settings, apiUrl: settings.apiUrl.trim(), apiKey: settings.apiKey.trim(), modelName: settings.modelName.trim(),
+              });
+              showToast('模型连接成功', 'success');
+            } catch (error) {
+              showToast(error instanceof Error ? error.message : '模型连接失败', 'error');
+            } finally {
+              setTesting(false);
+            }
+          }}>{testing ? '正在连接…' : '测试模型连接'}</Button>
+          <span className="text-xs text-stone-500">测试会发送一条短请求，不会保存设置。</span>
+        </div>
+      )}
+
       {/* 许可证信息 */}
-      {settings.licenseCode && (
+      {!isWebApp && settings.licenseCode && (
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-4">
             <div className="w-10 h-10 rounded-lg bg-green-50 flex items-center justify-center">
@@ -253,7 +284,7 @@ export default function Settings() {
       )}
 
       {/* 邮箱配置 */}
-      <div className="mb-8">
+      {!isWebApp && <div className="mb-8">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
             <Mail className="w-5 h-5 text-amber-600" />
@@ -302,7 +333,7 @@ export default function Settings() {
             />
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* 品牌色设置 */}
       <div className="mb-8">
@@ -361,7 +392,7 @@ export default function Settings() {
               <h3 className="font-semibold text-stone-800 text-sm">智能审核</h3>
             </div>
             <p className="text-sm text-stone-600 leading-relaxed">
-              支持输入文字、粘贴秀米链接或上传截图三种方式。AI 会自动检查错别字、语法错误、敏感词、逻辑矛盾等常见问题。
+              {isWebApp ? '粘贴文字或上传截图，使用已配置的模型检查推文。秀米链接请先复制文字或截图。' : '支持输入文字、粘贴秀米链接或上传截图三种方式。AI 会自动检查错别字、语法错误、敏感词、逻辑矛盾等常见问题。'}
             </p>
           </div>
           <div className="p-5 bg-white border border-stone-200 rounded-lg">
@@ -370,7 +401,7 @@ export default function Settings() {
               <h3 className="font-semibold text-stone-800 text-sm">工作台</h3>
             </div>
             <p className="text-sm text-stone-600 leading-relaxed">
-              管理公众号文章素材。支持添加文章、搜索查找、展开查看详情。「智能体提示词」标签页可自定义各步骤 AI 的系统提示词。
+              {isWebApp ? '管理文章、草稿和审核历史，也可在浏览器内压缩图片。资料不会跨设备同步。' : '管理公众号文章素材。支持添加文章、搜索查找、展开查看详情。'}
             </p>
           </div>
         </div>
@@ -394,7 +425,7 @@ export default function Settings() {
           </div>
           <div className="flex justify-between items-center">
             <span className="text-sm text-stone-600">版本</span>
-            <span className="text-sm font-medium text-stone-900">v0.1.0</span>
+            <span className="text-sm font-medium text-stone-900">{isWebApp ? '0.1.1 · Web' : '0.1.1'}</span>
           </div>
           <div className="flex justify-between items-center">
             <span className="text-sm text-stone-600">开发者</span>
@@ -402,10 +433,7 @@ export default function Settings() {
           </div>
           <div className="pt-3 border-t border-stone-100">
             <p className="text-xs text-stone-400 leading-relaxed">
-              本工具为华东师范大学教育学部公众号「未来教育引领者」的桌面端辅助应用，基于校内大模型 API 提供智能审核、文章生成、AI 排版等功能。所有数据存储在本地，确保隐私安全。
-            </p>
-            <p className="text-xs text-stone-400 leading-relaxed mt-2">
-              有任何问题或建议请联系 <a href="mailto:contact@example.invalid" className="text-red-600 hover:text-red-700 underline">contact@example.invalid</a>
+              {isWebApp ? '面向公众号运营的浏览器工作台。文稿和设置存储在此浏览器；使用 AI 时，相关素材会发送给配置的模型服务。' : '本工具为华东师范大学教育学部公众号「未来教育引领者」的桌面端辅助应用，基于校内大模型 API 提供智能审核、文章生成、AI 排版等功能。'}
             </p>
           </div>
         </div>
@@ -420,7 +448,7 @@ export default function Settings() {
         >
           {saved ? (
             <>
-              <span className="text-green-300 mr-2">✓</span>
+              <span aria-hidden="true" className="text-green-300 mr-2">✓</span>
               已保存
             </>
           ) : (

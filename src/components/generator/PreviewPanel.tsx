@@ -1,3 +1,5 @@
+import { isWebApp } from '@/lib/platform';
+import { safeArticleHtml } from '@/lib/safeArticleHtml';
 import { FileText, Copy, Download, Loader2, CheckCircle2, Sparkles, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { LayoutControls } from '@/components/LayoutControls';
@@ -337,27 +339,27 @@ export default function PreviewPanel({
                 <div
                   className="border border-stone-200 rounded-xl overflow-hidden transition-all duration-300 hover:shadow-lg animate-fade-in"
                   key={layoutHtml.substring(0, 40)}
-                  dangerouslySetInnerHTML={{ __html: layoutHtml }}
+                  dangerouslySetInnerHTML={{ __html: safeArticleHtml(layoutHtml) }}
                 />
               )}
               {!layoutHtml && !styleSpec && !layoutStage && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 px-1">
                     <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
-                      待排版文章
+                      {isWebApp ? '模板预览' : '待排版文章'}
                     </span>
-                    <span className="text-xs text-stone-400">点击「智能排版」生成排版效果</span>
+                    <span className="text-xs text-stone-400">{isWebApp ? '可直接导出，或用 AI 调整排版' : '点击「智能排版」生成排版效果'}</span>
                   </div>
                   <div
                     className="border border-stone-200 rounded-xl overflow-hidden transition-all duration-300 hover:shadow-lg"
-                    dangerouslySetInnerHTML={{ __html: generatedHtml }}
+                    dangerouslySetInnerHTML={{ __html: safeArticleHtml(generatedHtml) }}
                   />
                 </div>
               )}
             </div>
 
             {/* Action buttons — only shown after layout is complete */}
-            {layoutHtml && (
+            {(layoutHtml || (isWebApp && generatedHtml)) && (
               <div className="flex flex-wrap gap-3 pt-4 border-t border-stone-100">
                 <Button
                   variant="outline"
@@ -396,7 +398,7 @@ export default function PreviewPanel({
             <FileText className="w-8 h-8 text-green-600" />
           </div>
           <p className="text-stone-700 font-medium">暂无生成内容</p>
-          <p className="text-sm text-stone-400 mt-1.5">在左侧与 AI 对话生成推文后，预览将显示在这里</p>
+          <p className="text-sm text-stone-400 mt-1.5">{isWebApp ? '生成文章或排版现有稿件后，预览会显示在这里' : '在左侧与 AI 对话生成推文后，预览将显示在这里'}</p>
         </div>
       )}
     </div>

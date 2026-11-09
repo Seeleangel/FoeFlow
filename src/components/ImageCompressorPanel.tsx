@@ -1,3 +1,5 @@
+import { downloadBlob } from '@/lib/browserImage'
+import { isWebApp } from '@/lib/platform'
 import { useEffect, useRef } from 'react'
 import { Image, FolderOpen, Trash2, Play, X, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -55,7 +57,7 @@ export default function ImageCompressorPanel({ isActive = true }: ImageCompresso
       return
     }
     await processFiles()
-    showToast('处理完成', 'success')
+    if (!isWebApp) showToast('处理完成', 'success')
   }
 
   const getStatusBadge = (status: string) => {
@@ -104,7 +106,7 @@ export default function ImageCompressorPanel({ isActive = true }: ImageCompresso
         {files.length === 0 && (
           <>
             <p className="text-stone-600 font-medium">拖拽图片到此处，或点击选择</p>
-            <p className="text-xs text-stone-400 mt-1">支持 JPG / PNG / WebP，最多 50 张，单张不超过 200MB</p>
+            <p className="text-xs text-stone-400 mt-1">支持 JPG / PNG / WebP，最多 50 张，单张不超过 {isWebApp ? '20MB' : '200MB'}</p>
             <p className="text-xs text-stone-400 mt-0.5">也可直接 Ctrl+V 粘贴图片</p>
           </>
         )}
@@ -127,7 +129,12 @@ export default function ImageCompressorPanel({ isActive = true }: ImageCompresso
                   <span className="text-sm text-stone-700 truncate">{f.file.name}</span>
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
-                  <span className="text-xs text-stone-400">{formatBytes(f.file.size)}</span>
+                  <span className="text-xs text-stone-500">{formatBytes(f.output?.size ?? f.file.size)}</span>
+                  {f.output && <button type="button" className="text-xs font-medium text-red-800 underline underline-offset-4" onClick={() => {
+                    if (!f.output) return
+                    const extension = f.output.type === 'image/webp' ? 'webp' : f.output.type === 'image/png' ? 'png' : 'jpg'
+                    downloadBlob(f.output, f.file.name.replace(/\.[^.]+$/, '') + '-压缩.' + extension)
+                  }}>下载</button>}
                   {getStatusBadge(f.status)}
                   {f.status === 'failed' && f.error && (
                     <span className="text-xs text-red-500 max-w-[200px] truncate" title={f.error}>
@@ -153,15 +160,15 @@ export default function ImageCompressorPanel({ isActive = true }: ImageCompresso
 
       {/* 操作栏 */}
       {files.length > 0 && (
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-2 text-sm text-stone-500">
             <FolderOpen className="w-4 h-4" />
             <span className="truncate max-w-xs">
-              {outputDir || '未选择输出目录'}
+              {isWebApp ? '在浏览器压缩，完成后下载' : outputDir || '未选择输出目录'}
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <Button
+            {!isWebApp && <Button
               variant="outline"
               size="sm"
               onClick={selectOutputDir}
@@ -169,7 +176,7 @@ export default function ImageCompressorPanel({ isActive = true }: ImageCompresso
             >
               <FolderOpen className="w-3.5 h-3.5 mr-1.5" />
               选择目录
-            </Button>
+            </Button>}
             <Button
               variant="outline"
               size="sm"

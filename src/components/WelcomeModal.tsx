@@ -1,3 +1,4 @@
+import { publicAsset } from '@/lib/platform'
 import { useState, useCallback, useEffect } from 'react'
 import { FileCheck, PenTool, Mail, Library, Settings, ArrowRight, ArrowLeft, Info } from 'lucide-react'
 
@@ -112,7 +113,7 @@ export default function WelcomeModal({ onClose }: WelcomeModalProps) {
 function Step1Welcome() {
   return (
     <div className="text-center flex flex-col items-center justify-center h-full">
-      <img src="/logo.png" alt="FoeFlow" className="w-16 h-16 rounded-xl object-cover shadow-sm mb-6 animate-fade-in-up" style={{ animationDelay: '0ms' }} />
+      <img src={publicAsset('logo.png')} alt="FoeFlow" className="w-16 h-16 rounded-xl object-cover shadow-sm mb-6 animate-fade-in-up" style={{ animationDelay: '0ms' }} />
       <h1 id="welcome-title" className="text-3xl font-bold text-stone-900 tracking-tight mb-2 animate-fade-in-up" style={{ animationDelay: '80ms' }}>FoeFlow</h1>
       <p className="text-base text-stone-500 mb-2 animate-fade-in-up" style={{ animationDelay: '140ms' }}>公众号推文创作与审核助手</p>
       <p className="text-sm text-stone-400 animate-fade-in-up" style={{ animationDelay: '200ms' }}>感谢你使用本工具，让我们带你快速了解</p>

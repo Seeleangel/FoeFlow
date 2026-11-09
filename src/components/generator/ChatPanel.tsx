@@ -1,3 +1,4 @@
+import { isWebApp } from '@/lib/platform';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -30,6 +31,7 @@ interface ChatPanelProps {
   onToggleHistory: () => void;
   onGeneratePreview: (content: string) => void;
   onRetry: () => void;
+  onPreviewInput?: () => void;
   onLayoutTagClick?: (tag: string) => void;
 }
 
@@ -62,7 +64,7 @@ export default function ChatPanel({
   showHistory, sessions, currentSessionId, chatScrollRef,
   chatError, onInputChange, onSend, onNewSession, onLoadSession,
   onDeleteSession, onToggleHistory, onGeneratePreview, onRetry,
-  onLayoutTagClick,
+  onLayoutTagClick, onPreviewInput,
 }: ChatPanelProps) {
   const historyRef = useRef<HTMLDivElement>(null);
 
@@ -71,6 +73,7 @@ export default function ChatPanel({
   );
 
   useEffect(() => {
+    if (isWebApp) return;
     let cancelled = false;
     prefetchSuggestions().then((result) => {
       if (!cancelled) setSuggestions(result);
@@ -273,18 +276,25 @@ export default function ChatPanel({
       <div className="p-5 border-t border-stone-100 bg-white/80 backdrop-blur-sm flex-shrink-0">
         <div className="flex gap-2.5 items-end">
           <div className="flex-1 relative">
-            <Textarea value={inputValue} onChange={(e) => onInputChange(e.target.value)}
-              onKeyDown={(e) => { if (loading || pipelineLoading) return; if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
+            <Textarea aria-label="写作需求或现有稿件" placeholder={isWebApp ? "输入写作需求，或粘贴现有稿件" : undefined} value={inputValue} onChange={(e) => onInputChange(e.target.value)}
+              onKeyDown={(e) => { if (loading || pipelineLoading || e.nativeEvent.isComposing) return; if (!isWebApp && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
               disabled={loading || pipelineLoading}
               className="w-full min-h-[3.5rem] max-h-48 resize-none rounded-xl border border-stone-200 focus:border-brand-300 focus:ring-4 focus:ring-brand-100/50 transition-all duration-200 hover:border-stone-300 disabled:opacity-50 disabled:cursor-not-allowed pr-14"
               rows={1} />
           </div>
-          <Button onClick={onSend} disabled={loading || pipelineLoading || !inputValue.trim()}
+          <Button aria-label="发送给 AI" onClick={onSend} disabled={loading || pipelineLoading || !inputValue.trim()}
             className="h-[3.5rem] w-[4.5rem] bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-700 hover:to-brand-600 text-white rounded-xl shadow-lg shadow-brand-200/50 hover-lift press-scale disabled:opacity-50 disabled:shadow-none disabled:hover-lift transition-all duration-300 flex items-center justify-center group">
             {loading ? <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Send className="w-5 h-5 transition-all duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />}
           </Button>
         </div>
-        <p className="text-xs text-stone-400 text-center mt-2">按 Enter 发送，Shift + Enter 换行</p>
+        {onPreviewInput ? (
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+            <button type="button" onClick={onPreviewInput} disabled={loading || pipelineLoading || !inputValue.trim()} className="rounded px-2 py-1.5 text-sm text-red-800 underline underline-offset-4 disabled:text-stone-400">
+              排版现有稿件
+            </button>
+            <span className="text-xs text-stone-500">模板排版无需模型</span>
+          </div>
+        ) : <p className="text-xs text-stone-400 text-center mt-2">按 Enter 发送，Shift + Enter 换行</p>}
       </div>
     </div>
   );

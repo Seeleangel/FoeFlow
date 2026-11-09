@@ -1,5 +1,6 @@
 import { useState, useEffect, Component, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { isWebApp } from '@/lib/platform';
 import { initDb } from '@/hooks/useDb';
 import { seedSampleArticles } from '@/lib/seedSampleArticles';
 import { loadSettings, saveSettings } from '@/lib/settingsStorage'
@@ -38,6 +39,8 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
   }
 }
 
+type ActivationStatus = { active: boolean; code?: string; fingerprint?: string; token?: string; expires_at?: number };
+
 function App() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,17 +65,16 @@ function App() {
 
   useEffect(() => {
     let loadedSettings: AppSettings;
-    Promise.all([
-      initDb(),
-      seedSampleArticles(),
-    ])
+    initDb()
+      .then(() => isWebApp ? undefined : seedSampleArticles())
       .then(() => loadSettings())
-      .then((s) => {
+      .then((s): Promise<ActivationStatus> => {
         loadedSettings = s;
         setSettings(s);
-        setShowWelcome(!s.hasSeenWelcome);
+        setShowWelcome(!isWebApp && !s.hasSeenWelcome);
+        if (isWebApp) return Promise.resolve({ active: true });
         // Check license activation
-        return invoke<{ active: boolean; code?: string; fingerprint?: string; token?: string; expires_at?: number }>('check_activation');
+        return invoke<ActivationStatus>('check_activation');
       })
       .then((status) => {
         setLicenseActive(status.active);
@@ -88,7 +90,7 @@ function App() {
           setSettings(updated);
         }
         setReady(true);
-        prefetchSuggestions();
+        if (!isWebApp) prefetchSuggestions();
       })
       .catch((err) => {
         console.error('Failed to initialize app:', err);

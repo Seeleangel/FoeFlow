@@ -1,3 +1,4 @@
+import { isWebApp } from '@/lib/platform';
 import { getDb } from '@/hooks/useDb';
 import type { StyleTemplate, UserArticle } from '@/types';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
@@ -22,7 +23,7 @@ export async function getAllTemplates(): Promise<StyleTemplate[]> {
       updated_at: number;
     }[]
   >('SELECT * FROM style_templates ORDER BY created_at DESC');
-  console.log('[getAllTemplates] Raw rows:', rows.length, rows);
+
   return rows.map((r) => ({
     id: r.id,
     name: r.name,
@@ -152,6 +153,28 @@ async function downloadImage(imageUrl: string): Promise<Response> {
  * 返回可直接在 Tauri 中使用的本地 asset URL
  */
 export async function saveGeneratedImage(imageUrl: string, filename?: string): Promise<string> {
+  if (isWebApp) {
+    const url = new URL(imageUrl);
+    if (url.protocol === 'data:' && /^data:image\/(?:png|jpe?g|webp);base64,/i.test(imageUrl)) return imageUrl;
+    if (url.protocol !== 'https:' || url.username || url.password) throw new Error('不支持此图片地址');
+    // When image hosting allows CORS, keep an offline copy with the draft.
+    // Otherwise the HTTPS image can still be displayed via <img>.
+    try {
+      const response = await fetch(imageUrl, { credentials: 'omit', signal: AbortSignal.timeout(20_000) });
+      if (!response.ok) return imageUrl;
+      const blob = await response.blob();
+      if (!/^image\/(png|jpe?g|webp)$/i.test(blob.type) || blob.size > 8 * 1024 * 1024) return imageUrl;
+      return await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+    } catch {
+      return imageUrl;
+    }
+  }
+
   console.log('[saveGeneratedImage] Processing image:', imageUrl);
 
   // 生成安全文件名（移除 Windows 非法字符并限制长度）
@@ -222,6 +245,7 @@ export async function getGeneratedImage(filename: string): Promise<string> {
  * 清理 30 天前的图片
  */
 export async function cleanupOldImages(maxAgeDays: number = 30): Promise<void> {
+  if (isWebApp) return;
   const baseDir = await appDataDir();
   const imagesDir = await join(baseDir, 'generated-images');
 

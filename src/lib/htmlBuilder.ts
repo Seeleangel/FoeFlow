@@ -116,7 +116,7 @@ export function buildHtmlArticle(
     } else if (trimmed.startsWith('【此处配图')) {
       // Image placeholder — extract alt text from 【此处配图：说明】
       const altMatch = trimmed.match(/【此处配图[：:]\s*(.*?)】/);
-      const alt = altMatch ? altMatch[1] : '配图';
+      const alt = altMatch ? escapeHtml(altMatch[1]) : '配图';
       bodyParts.push(
         `<img src="${PLACEHOLDER_IMG_DATA_URI}" alt="${alt}" style="display:block;max-width:100%;height:auto;margin:20px auto;border-radius:4px;">`
       );

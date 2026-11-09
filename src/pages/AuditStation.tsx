@@ -1,3 +1,4 @@
+import { isWebApp } from '@/lib/platform';
 import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -79,7 +80,7 @@ export default function AuditStation() {
     loadAuditDraft()
       .then((draft) => {
         if (draft) {
-          setInputMode(draft.inputMode);
+          setInputMode(isWebApp && draft.inputMode === 'xiemi' ? 'text' : draft.inputMode);
           setTextContent(draft.textContent);
           setXiemiUrl(draft.xiemiUrl);
         }
@@ -117,7 +118,7 @@ export default function AuditStation() {
     { mode: 'text' as const, icon: FileText, label: '纯文本' },
     { mode: 'xiemi' as const, icon: Link2, label: '秀米链接' },
     { mode: 'screenshot' as const, icon: Image, label: '截图上传' },
-  ];
+  ].filter(({ mode }) => !isWebApp || mode !== 'xiemi');
 
   useEffect(() => {
     const updateSlider = () => {
@@ -281,7 +282,7 @@ export default function AuditStation() {
         { role: 'system', content: '你是一位专业的教育类公众号推文审核专家。' },
         { role: 'user', content: prompt },
       ]);
-      console.log('[AuditStation] LLM returned, raw length:', raw.length, 'first 100 chars:', raw.slice(0, 100));
+      console.log('[AuditStation] LLM returned, raw length:', raw.length, 'received');
       const parsed = parseAuditResult(raw);
       console.log('[AuditStation] Parsed issues:', parsed.length, parsed);
       setIssues(parsed);

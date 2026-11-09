@@ -1,5 +1,7 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { loadSettings } from './settingsStorage';
+import { isWebApp } from './platform';
+import type { AppSettings } from '@/types';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -7,6 +9,13 @@ export interface ChatMessage {
 }
 
 const API_TIMEOUT_MS = 120000;
+const SCHOOL_MODEL_BASE = 'https://chat.ecnu.edu.cn/open/api/v1';
+const SCHOOL_MODEL_PATHS = ['/chat/completions', '/images/generations'];
+
+function webModelRequestUrl(endpoint: URL): string {
+  const path = SCHOOL_MODEL_PATHS.find((value) => endpoint.href === SCHOOL_MODEL_BASE + value);
+  return path ? import.meta.env.BASE_URL + '_model' + path : endpoint.href;
+}
 
 function isTauriEnv(): boolean {
   return typeof window !== 'undefined' && !!((window as unknown) as Record<string, unknown>).__TAURI_INTERNALS__;
@@ -26,13 +35,27 @@ async function proxyFetch(
     // Select once before sending. Retrying a timed-out POST via another adapter can
     // generate duplicate paid requests while the original is still running.
     const adapter = isTauriEnv() ? tauriFetch : fetch;
-    const response = await adapter(url, { ...options, signal: controller.signal });
+    let requestUrl = url;
+    if (isWebApp) {
+      const endpoint = new URL(url);
+      if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password) {
+        throw new Error('请填写不含账号密码的 HTTPS 模型接口');
+      }
+      requestUrl = webModelRequestUrl(endpoint);
+    }
+    const response = await adapter(requestUrl, {
+      ...options, signal: controller.signal,
+      ...(isWebApp ? { credentials: 'omit' as const, redirect: 'error' as const } : {}),
+    });
     const body = await response.text();
     if (controller.signal.aborted) throw new DOMException('请求已取消', 'AbortError');
     return { status: response.status, body };
   } catch (error) {
     if (signal?.aborted) throw new DOMException('任务已停止', 'AbortError');
     if (controller.signal.aborted) throw new Error('AI 请求超过 120 秒，请稍后重试');
+    if (isWebApp && error instanceof TypeError) {
+      throw new Error('浏览器无法连接模型服务。请检查接口地址、网络和服务的跨域（CORS）设置。');
+    }
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -42,9 +65,10 @@ async function proxyFetch(
 
 export async function callSchoolLLM(
   messages: ChatMessage[], temperature?: number, maxTokens?: number, signal?: AbortSignal,
+  configuration?: Pick<AppSettings, 'apiUrl' | 'apiKey' | 'modelName'>,
 ): Promise<string> {
   if (signal?.aborted) throw new DOMException('任务已停止', 'AbortError');
-  const settings = await loadSettings();
+  const settings = configuration ?? await loadSettings();
   if (signal?.aborted) throw new DOMException('任务已停止', 'AbortError');
   if (!settings.apiUrl || !settings.apiKey) {
     throw new Error('API 配置不完整，请先在设置中填写');
@@ -197,7 +221,6 @@ export async function callSchoolLLMWithImages(
   const data = JSON.parse(response.body) as {
     choices?: [{ message?: { content?: string } }];
   };
-  console.log('[callSchoolLLMWithImages] Response data:', data);
   return data.choices?.[0]?.message?.content ?? '';
 }
 
@@ -283,41 +306,10 @@ export async function callSchoolLLMStream(
     Authorization: `Bearer ${settings.apiKey}`,
   };
 
-  let body: string;
-  let status: number;
-
-  // Strategy 1: tauriFetch bypasses CORS via Rust backend and supports streaming
-  try {
-    console.log('[callSchoolLLMStream] trying tauriFetch to', settings.apiUrl);
-    const response = await tauriFetch(settings.apiUrl, {
-      method: 'POST',
-      headers: requestHeaders,
-      body: requestBody,
-    });
-    status = response.status;
-    body = await response.text();
-    console.log('[callSchoolLLMStream] tauriFetch succeeded, status:', status);
-  } catch (tauriErr) {
-    const tauriErrMsg = tauriErr instanceof Error ? tauriErr.message : String(tauriErr);
-    console.warn('[callSchoolLLMStream] tauriFetch failed:', tauriErrMsg);
-    // Strategy 2: proxyFetch (custom invoke command)
-    try {
-      const result = await proxyFetch(settings.apiUrl, {
-        method: 'POST',
-        headers: requestHeaders,
-        body: requestBody,
-      });
-      status = result.status;
-      body = result.body;
-    } catch (proxyErr) {
-      const proxyErrMsg = proxyErr instanceof Error ? proxyErr.message : String(proxyErr);
-      throw new Error(`请求发送失败：${proxyErrMsg}`);
-    }
-  }
-
-  if (status !== 200) {
-    throw new Error(`API 请求失败：${status} ${body}`);
-  }
+  const { body, status } = await proxyFetch(settings.apiUrl, {
+    method: 'POST', headers: requestHeaders, body: requestBody,
+  });
+  if (status !== 200) throw new Error(`API 请求失败：${status}`);
 
   // Parse SSE format line by line and simulate streaming
   const lines = body.split('\n');
