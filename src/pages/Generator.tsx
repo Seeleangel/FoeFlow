@@ -1,8 +1,10 @@
 import { isWebApp } from '@/lib/platform';
 import { safeArticleHtml } from '@/lib/safeArticleHtml';
 import { downloadBlob } from '@/lib/browserImage';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAgentRun } from '@/hooks/useAgentRun';
+import { runEditorialAgent, type EditorialHandoff } from '@/lib/editorialAgent';
+import { Button } from '@/components/ui/button';
 import { isAbortError, throwIfAborted } from '@/lib/agentRuntime';
 import { parseJsonObject, parseLayoutDirection } from '@/lib/agentValidation';
 import { useArticlePipeline } from '@/hooks/useArticlePipeline';
@@ -52,6 +54,12 @@ export default function Generator() {
   const [generatedHtml, setGeneratedHtml] = useState('');
   const [generatedTitle, setGeneratedTitle] = useState('');
   const [loading, setLoading] = useState(false);
+  const [creationMode, setCreationMode] = useState<'agent' | 'manual'>('agent');
+  const [editorial, setEditorial] = useState<EditorialHandoff>();
+  const [editorialProgress, setEditorialProgress] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const confirmationInFlight = useRef(false);
+  const sessionChanging = useRef(false);
   const { begin: beginChatRun, cancel: cancelChatRun } = useAgentRun();
   const [layoutStrategy, setLayoutStrategy] = useState<LayoutStrategy | null>(null);
   const [layoutHtml, setLayoutHtml] = useState<string>('');
@@ -178,92 +186,103 @@ export default function Generator() {
     }
   }, [layoutDirections, selectedDirection, generatedText, handleLayoutDirectionSelect]);
 
+  const snapshot = useMemo<GeneratorSessionState>(() => ({
+    messages: chatMessages.map((message) => ({ ...message, timestamp: message.timestamp.toISOString() })),
+    chatInput, generatedText, generatedHtml, generatedTitle, layoutHtml,
+    layoutStrategyJson: layoutStrategy ? JSON.stringify(layoutStrategy) : '',
+    styleSpecJson: styleSpec ? JSON.stringify(styleSpec) : '',
+    selectedDirectionJson: selectedDirection ? JSON.stringify(selectedDirection) : '',
+    selectedTemplateId: selectedId,
+    editorial,
+  }), [chatMessages, chatInput, generatedText, generatedHtml, generatedTitle, layoutHtml, layoutStrategy, styleSpec, selectedDirection, selectedId, editorial]);
+
   const flushSave = async () => {
-    const currentId = sessionRef.current;
-    const hasContent = chatMessages.length > 0 || generatedText.length > 0;
-    if (!hasContent) return;
-    const state: GeneratorSessionState = {
-      messages: chatMessages.map((m) => ({
-        ...m,
-        timestamp: m.timestamp.toISOString(),
-      })),
-      chatInput,
-      generatedText,
-      generatedHtml,
-      generatedTitle,
-      layoutHtml,
-      layoutStrategyJson: layoutStrategy ? JSON.stringify(layoutStrategy) : '',
-      styleSpecJson: styleSpec ? JSON.stringify(styleSpec) : '',
-      selectedDirectionJson: selectedDirection ? JSON.stringify(selectedDirection) : '',
-      selectedTemplateId: selectedId,
-    };
-    await saveGeneratorSession(currentId, state).catch(console.error);
+    if (snapshot.messages.length || snapshot.generatedText) await saveGeneratorSession(sessionRef.current, snapshot).catch(console.error);
   };
 
   const stopAllTasks = () => {
     cancelChatRun(); cancelArticlePipeline(); cancelLayoutPipeline();
-    setLoading(false); setLayoutFeedbackState('idle');
+    setLoading(false); setEditorialProgress(''); setLayoutFeedbackState('idle');
   };
 
   const handleNewSession = async () => {
-    stopAllTasks();
-    await flushSave();
-    const newId = `generator_${Date.now()}`;
-    setSession(newId);
-    setChatMessages([]);
-    setChatInput('');
-    setGeneratedText('');
-    setGeneratedHtml('');
-    setGeneratedTitle('');
-    setLayoutHtml('');
-    setLayoutStrategy(null);
-    reset();
-    setLayoutFeedbackState('idle');
-    cancelArticlePipeline();
-    setShowHistory(false);
+    if (confirmationInFlight.current || sessionChanging.current) return;
+    sessionChanging.current = true;
+    try {
+      stopAllTasks();
+      lastUserInputRef.current = '';
+      setChatError(null);
+      await flushSave();
+      const newId = `generator_${Date.now()}`;
+      setSession(newId);
+      setChatMessages([]);
+      setChatInput('');
+      setGeneratedText('');
+      setGeneratedHtml('');
+      setGeneratedTitle('');
+      setEditorial(undefined);
+      setLayoutHtml('');
+      setLayoutStrategy(null);
+      reset();
+      setLayoutFeedbackState('idle');
+      cancelArticlePipeline();
+      setShowHistory(false);
+    } finally {
+      sessionChanging.current = false;
+    }
   };
 
   const handleLoadSession = async (sessionId: string) => {
+    if (confirmationInFlight.current || sessionChanging.current) return;
     if (sessionId === sessionRef.current) {
       setShowHistory(false);
       return;
     }
-    stopAllTasks();
-    await flushSave();
-    const loaded = await loadGeneratorSession(sessionId);
-    if (loaded) {
-      setSession(sessionId);
-      setChatMessages(
-        loaded.state.messages.map((m) => ({ ...m, timestamp: new Date(m.timestamp), isHistorical: true }))
-      );
-      setChatInput(loaded.state.chatInput);
-      setGeneratedText(loaded.state.generatedText);
-      setGeneratedHtml(loaded.state.generatedHtml);
-      setGeneratedTitle(loaded.state.generatedTitle);
-      setLayoutHtml(loaded.state.layoutHtml);
-      if (loaded.state.layoutStrategyJson) {
-        try {
-          setLayoutStrategy(JSON.parse(loaded.state.layoutStrategyJson));
-        } catch {
+    sessionChanging.current = true;
+    try {
+      stopAllTasks();
+      await flushSave();
+      const loaded = await loadGeneratorSession(sessionId);
+      if (loaded) {
+        lastUserInputRef.current = '';
+        setChatError(null);
+        setSession(sessionId);
+        setChatMessages(
+          loaded.state.messages.map((m) => ({ ...m, timestamp: new Date(m.timestamp), isHistorical: true }))
+        );
+        setChatInput(loaded.state.chatInput);
+        setGeneratedText(loaded.state.generatedText);
+        setGeneratedHtml(loaded.state.generatedHtml);
+        setGeneratedTitle(loaded.state.generatedTitle);
+        setEditorial(loaded.state.editorial);
+        setLayoutHtml(loaded.state.layoutHtml);
+        if (loaded.state.layoutStrategyJson) {
+          try {
+            setLayoutStrategy(JSON.parse(loaded.state.layoutStrategyJson));
+          } catch {
+            setLayoutStrategy(null);
+          }
+        } else {
           setLayoutStrategy(null);
         }
-      } else {
-        setLayoutStrategy(null);
+        reset();
+        cancelArticlePipeline();
+        if (loaded.state.styleSpecJson) {
+          try { setStyleSpec(JSON.parse(loaded.state.styleSpecJson)); } catch { /* keep null */ }
+        }
+        if (loaded.state.selectedDirectionJson) {
+          try { setSelectedDirection(JSON.parse(loaded.state.selectedDirectionJson)); } catch { /* keep null */ }
+        }
       }
-      reset();
-      cancelArticlePipeline();
-      if (loaded.state.styleSpecJson) {
-        try { setStyleSpec(JSON.parse(loaded.state.styleSpecJson)); } catch { /* keep null */ }
-      }
-      if (loaded.state.selectedDirectionJson) {
-        try { setSelectedDirection(JSON.parse(loaded.state.selectedDirectionJson)); } catch { /* keep null */ }
-      }
+      setShowHistory(false);
+    } finally {
+      sessionChanging.current = false;
     }
-    setShowHistory(false);
   };
 
   const handleDeleteSession = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (confirmationInFlight.current) return;
     await deleteGeneratorSession(id);
     const updatedSessions = await getAllGeneratorSessions();
     setSessions(updatedSessions.map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt })));
@@ -289,7 +308,7 @@ export default function Generator() {
   };
 
   const handleChatSend = async () => {
-    if (loading || articlePipelineLoading || layoutStage === 'generating' || specLoading) return;
+    if (sessionChanging.current || confirmationInFlight.current || loading || articlePipelineLoading || layoutStage === 'generating' || specLoading) return;
     const rawText = chatInput.trim() || lastUserInputRef.current;
     if (!rawText) return;
     const chatRun = beginChatRun();
@@ -374,14 +393,45 @@ export default function Generator() {
         return;
       }
 
-      // Normal flow requires template
-      if (!selectedTemplate || loading || articlePipelineLoading) return;
+      if (!selectedTemplate) return;
 
+      const latestMessage = chatMessages[chatMessages.length - 1];
+      const retrying = !chatInput.trim() && latestMessage?.role === 'user' && latestMessage.content === text;
       const newUserMessage: ChatMessage = { role: 'user', content: text, timestamp: new Date() };
-      const newMessages = [...chatMessages, newUserMessage];
+      const newMessages = retrying ? chatMessages : [...chatMessages, newUserMessage];
       setChatMessages(newMessages);
       setChatInput('');
       setLoading(true);
+
+      if (creationMode === 'agent') {
+        try {
+          const result = await runEditorialAgent({
+            messages: newMessages.map(({ role, content }) => ({ role, content })),
+            previousDraft: generatedText,
+            template: { name: selectedTemplate.name, structureJson: selectedTemplate.structureJson },
+            signal: chatRun.signal,
+            onStep: label => { if (chatRun.isCurrent()) setEditorialProgress(label); },
+          });
+          if (!chatRun.isCurrent()) return;
+          if (result.type === 'draft') {
+            setGeneratedText(result.text);
+            setGeneratedTitle(result.title);
+            setGeneratedHtml(result.html);
+            setLayoutHtml(result.html);
+            setLayoutStrategy(null);
+            setEditorial(result.handoff);
+            reset();
+          }
+          const content = result.type === 'question' ? result.text : '稿件已完成审稿和排版，请在预览中核对后确认成稿。';
+          setChatMessages([...newMessages, { role: 'assistant', content, timestamp: new Date() }]);
+        } catch (err) {
+          if (!chatRun.isCurrent() || isAbortError(err)) return;
+          setChatError(err instanceof Error ? err.message : 'Agent 暂未完成，请重试。');
+        } finally {
+          if (chatRun.isCurrent()) setEditorialProgress('');
+        }
+        return;
+      }
 
       try {
         const result = await gatherRequirements(newMessages, chatRun.signal);
@@ -430,8 +480,9 @@ export default function Generator() {
   };
 
   const generateResultFromText = async (text: string) => {
-    if (!selectedTemplate) return;
+    if (!selectedTemplate || sessionChanging.current || confirmationInFlight.current || loading) return;
     try {
+      setEditorial(undefined);
       setGeneratedText(text);
       // Remove the # Title line from paragraphs to avoid double rendering in buildHtmlArticle
       const paragraphs = text.split('\n').filter((p) => p.trim() && !p.startsWith('# '));
@@ -450,71 +501,28 @@ export default function Generator() {
     }
   };
 
-  // 自动保存会话到历史
   useEffect(() => {
-    const hasContent = chatMessages.length > 0 || generatedText.length > 0;
-    if (!hasContent) return;
-
-    const currentId = session;
+    if (!snapshot.messages.length && !snapshot.generatedText) return;
     const timer = setTimeout(() => {
-      const state: GeneratorSessionState = {
-        messages: chatMessages.map((m) => ({
-          ...m,
-          timestamp: m.timestamp.toISOString(),
-        })),
-        chatInput,
-        generatedText,
-        generatedHtml,
-        generatedTitle,
-        layoutHtml,
-        layoutStrategyJson: layoutStrategy ? JSON.stringify(layoutStrategy) : '',
-        styleSpecJson: styleSpec ? JSON.stringify(styleSpec) : '',
-        selectedDirectionJson: selectedDirection ? JSON.stringify(selectedDirection) : '',
-        selectedTemplateId: selectedId,
-      };
-      saveGeneratorSession(currentId, state)
-        .then(() => {
-          setSessions((prev) => {
-            const filtered = prev.filter((s) => s.id !== currentId);
-            return [
-              { id: currentId, title: generatedTitle || '未命名生成', updatedAt: Date.now() },
-              ...filtered,
-            ];
-          });
-        })
+      if (confirmationInFlight.current) return;
+      saveGeneratorSession(session, snapshot)
+        .then(() => setSessions(prev => [
+          { id: session, title: snapshot.generatedTitle || '未命名生成', updatedAt: Date.now() },
+          ...prev.filter(item => item.id !== session),
+        ]))
         .catch(console.error);
     }, AUTO_SAVE_DEBOUNCE_MS);
-
     return () => clearTimeout(timer);
-  }, [chatMessages, chatInput, generatedText, generatedHtml, generatedTitle, layoutStrategy, layoutHtml, selectedId, styleSpec, selectedDirection, session]);
+  }, [snapshot, session]);
 
-  const flushRef = useRef({ chatMessages, chatInput, generatedText, generatedHtml, generatedTitle, layoutHtml, layoutStrategy, styleSpec, selectedDirection, selectedId });
-  flushRef.current = { chatMessages, chatInput, generatedText, generatedHtml, generatedTitle, layoutHtml, layoutStrategy, styleSpec, selectedDirection, selectedId };
+  const flushRef = useRef(snapshot);
+  flushRef.current = snapshot;
 
-  // Flush save on unmount
-  useEffect(() => {
-    return () => {
-      const latest = flushRef.current;
-      const currentId = sessionRef.current;
-      const hasContent = latest.chatMessages.length > 0 || latest.generatedText.length > 0;
-      if (!hasContent) return;
-      const state: GeneratorSessionState = {
-        messages: latest.chatMessages.map((m) => ({
-          ...m,
-          timestamp: m.timestamp.toISOString(),
-        })),
-        chatInput: latest.chatInput,
-        generatedText: latest.generatedText,
-        generatedHtml: latest.generatedHtml,
-        generatedTitle: latest.generatedTitle,
-        layoutHtml: latest.layoutHtml,
-        layoutStrategyJson: latest.layoutStrategy ? JSON.stringify(latest.layoutStrategy) : '',
-        styleSpecJson: latest.styleSpec ? JSON.stringify(latest.styleSpec) : '',
-        selectedDirectionJson: latest.selectedDirection ? JSON.stringify(latest.selectedDirection) : '',
-        selectedTemplateId: latest.selectedId,
-      };
-      saveGeneratorSession(currentId, state).catch(console.error);
-    };
+  useEffect(() => () => {
+    const latest = flushRef.current;
+    if (!confirmationInFlight.current && (latest.messages.length || latest.generatedText)) {
+      saveGeneratorSession(sessionRef.current, latest).catch(console.error);
+    }
   }, []);
 
   const [chatError, setChatError] = useState<string | null>(null);
@@ -656,7 +664,29 @@ export default function Generator() {
     }
   };
 
+  const confirmFinal = async () => {
+    if (editorial?.status !== 'pending' || loading || sessionChanging.current || confirmationInFlight.current) return;
+    confirmationInFlight.current = true;
+    setConfirming(true);
+    const confirmed: EditorialHandoff = { ...editorial, status: 'confirmed' };
+    const next = { ...snapshot, editorial: confirmed };
+    try {
+      await saveGeneratorSession(session, next);
+      flushRef.current = next;
+      setEditorial(confirmed);
+      showToast('已确认成稿', 'success');
+    } catch {
+      showToast('成稿确认未保存，请重试。', 'error');
+    } finally {
+      confirmationInFlight.current = false;
+      setConfirming(false);
+    }
+  };
+
+  const outputLocked = editorial !== undefined && (editorial.status === 'pending' || loading || confirming);
+
   const handleCopyHtml = () => {
+    if (outputLocked) return;
     navigator.clipboard
       .writeText(safeArticleHtml(layoutHtml || generatedHtml))
       .then(() => showToast('HTML 已复制到剪贴板', 'success'))
@@ -664,6 +694,7 @@ export default function Generator() {
   };
 
   const handleSaveDraft = async () => {
+    if (outputLocked) return;
     const title = generatedTitle || selectedTemplate?.name || '未命名文章';
     try {
       await saveDraft({
@@ -682,6 +713,7 @@ export default function Generator() {
   };
 
   const handleExportWord = async () => {
+    if (outputLocked) return;
     const paragraphs = generatedText.split('\n').filter((p) => p.trim() && !p.startsWith('# '));
     const title = generatedTitle || selectedTemplate?.name || '未命名文章';
     const blob = await exportToDocx(title, paragraphs);
@@ -689,16 +721,26 @@ export default function Generator() {
   };
 
   return (
-    <div className={`${isWebApp ? 'min-h-full lg:h-full lg:flex lg:flex-col' : 'h-screen overflow-hidden'} bg-gradient-to-b from-stone-50 to-white transition-opacity duration-500 ${mounted ? 'opacity-100' : 'opacity-0'}`}>
+    <div className={`${isWebApp ? 'min-h-full lg:h-full lg:flex lg:flex-col' : 'flex h-screen flex-col overflow-hidden'} bg-gradient-to-b from-stone-50 to-white transition-opacity duration-500 ${mounted ? 'opacity-100' : 'opacity-0'}`}>
       {/* 页面标题区域 */}
-      <div className={`max-w-5xl w-full mx-auto px-5 sm:px-8 pt-8 sm:pt-12 pb-6 sm:pb-8 transition-all duration-500 ease-out ${mounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}>
+      <div className={`max-w-5xl w-full mx-auto shrink-0 px-5 sm:px-8 pt-8 sm:pt-12 pb-6 sm:pb-8 transition-all duration-500 ease-out ${mounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}>
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-3xl font-bold text-stone-900 tracking-tight mb-2">文章生成器</h1>
-            <p className="text-base text-stone-500">{isWebApp ? '与 AI 一起写稿，或粘贴已有稿件直接排版' : '选择风格模板，快速生成或对话共创推文内容'}</p>
+            <div role="group" aria-label="创作模式" className="mt-3 flex flex-wrap gap-2">
+              <Button variant={creationMode === 'agent' ? 'secondary' : 'ghost'} aria-pressed={creationMode === 'agent'}
+                disabled={loading || articleStage !== null || specLoading || layoutStage === 'generating' || confirming}
+                onClick={() => setCreationMode('agent')}>Agent 创作</Button>
+              <Button variant={creationMode === 'manual' ? 'secondary' : 'ghost'} aria-pressed={creationMode === 'manual'}
+                disabled={loading || specLoading || layoutStage === 'generating' || confirming}
+                onClick={() => setCreationMode('manual')}>手动共创</Button>
+            </div>
+            <p className="mt-2 text-sm text-stone-600">{creationMode === 'agent'
+              ? '按需查工作台素材，写作、审稿和排版后由你确认。检索到的相关片段会发给当前模型。'
+              : '分步选择写作方向和排版，或直接排版现有稿件。'}</p>
             {(loading || articlePipelineLoading || specLoading || layoutStage === 'generating') && (
               <div className="mt-3 flex items-center gap-3 text-sm" role="status">
-                <span className="text-stone-500">{articleProgress || layoutProgress || '正在整理需求'}</span>
+                <span className="text-stone-500">{editorialProgress || articleProgress || layoutProgress || '正在整理需求'}</span>
                 <button type="button" onClick={stopAllTasks} className="text-red-600 hover:underline">停止生成</button>
               </div>
             )}
@@ -707,7 +749,7 @@ export default function Generator() {
       </div>
 
       {/* 主内容区域 */}
-      <div className={`max-w-5xl w-full mx-auto pb-6 ${isWebApp ? 'px-5 sm:px-8 lg:flex-1 lg:min-h-0 lg:overflow-hidden' : 'px-8 h-[calc(100vh-8rem)] overflow-hidden'}`}>
+      <div className={`max-w-5xl w-full mx-auto pb-6 ${isWebApp ? 'px-5 sm:px-8 lg:flex-1 lg:min-h-0 lg:overflow-hidden' : 'min-h-0 flex-1 overflow-hidden px-8'}`}>
         {selectedTemplate && (
           <div className={`grid gap-6 ${isWebApp ? 'grid-cols-1 lg:grid-cols-2 lg:h-full' : 'grid-cols-2 h-full'}`}>
             <div className={isWebApp ? "h-[28rem] min-w-0 lg:h-full overflow-hidden" : "h-full overflow-hidden"}>
@@ -715,7 +757,7 @@ export default function Generator() {
                 messages={chatMessages}
                 inputValue={chatInput}
                 loading={loading}
-                pipelineLoading={articlePipelineLoading || specLoading || layoutStage === 'generating'}
+                pipelineLoading={confirming || articlePipelineLoading || specLoading || layoutStage === 'generating'}
                 showHistory={showHistory}
                 sessions={sessions}
                 currentSessionId={session}
@@ -728,6 +770,7 @@ export default function Generator() {
                 onDeleteSession={handleDeleteSession}
                 onToggleHistory={() => setShowHistory((v) => !v)}
                 onGeneratePreview={generateResultFromText}
+                allowMessagePreview={creationMode === 'manual' && !outputLocked}
                 onRetry={handleChatSend}
                 onPreviewInput={isWebApp ? () => {
                   const text = chatInput.trim();
@@ -739,6 +782,10 @@ export default function Generator() {
               />
             </div>
             <PreviewPanel
+              editorial={editorial}
+              canConfirm={!loading && !confirming}
+              outputLocked={outputLocked}
+              onConfirmFinal={confirmFinal}
               articleStage={articleStage}
               articleSpec={articleSpec}
               articleDirections={articleDirections}

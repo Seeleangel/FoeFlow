@@ -39,6 +39,7 @@ with sync_playwright() as playwright:
     page = context.new_page()
     errors = []
     calls = []
+    tools = []
     page.on("pageerror", lambda error: errors.append(str(error)))
 
     def model(route):
@@ -46,7 +47,34 @@ with sync_playwright() as playwright:
         request = route.request.post_data_json
         user = request["messages"][-1]["content"]
         calls.append(user)
-        if user == "请只回复 OK":
+        system = request["messages"][0]["content"]
+        if system.startswith("你是 FoeFlow 的公众号编辑 Agent"):
+            data = json.loads(user)
+            brief = data["conversation"][-1]["content"]
+            if brief == "请帮我准备一篇校园分享推文":
+                action = {"tool": "ask", "question": "请问这篇推文面向哪些读者？"}
+            elif not data["sources"] and not data["previousDraft"]:
+                action = {"tool": "search", "query": "校园分享"}
+            elif "draft" not in data:
+                action = {"tool": "write", "instructions": "根据本次需求写作"}
+            elif not data["layoutReady"]:
+                action = {"tool": "layout", "theme": "warm-editorial"}
+            elif "review" not in data:
+                action = {"tool": "review"}
+            else:
+                action = {"tool": "submit"}
+            tools.append(action["tool"])
+            content = json.dumps(action, ensure_ascii=False)
+        elif system.startswith("你是公众号写作工具"):
+            data = json.loads(user)
+            if data["previousDraft"]:
+                content = "# 校园分享活动修订稿\n欢迎家长参加周五的阅读分享。"
+            else:
+                assert any(source["title"] == "校园分享活动" for source in data["sources"])
+                content = "# 校园分享活动通知\n欢迎同学参加周五的阅读分享。"
+        elif system.startswith("你是公众号审稿工具"):
+            content = json.dumps({"blocking": [], "notes": ["请确认报名截止时间。"]}, ensure_ascii=False)
+        elif user == "请只回复 OK":
             content = "OK"
         elif "审核" in request["messages"][0]["content"]:
             content = json.dumps([{"dimension": "text", "severity": "medium",
@@ -115,6 +143,39 @@ with sync_playwright() as playwright:
     page.get_by_role("button", name="发送给 AI").click()
     expect(page.get_by_text("请问这篇推文面向哪些读者？", exact=True)).to_be_visible()
     assert len(calls) == 3, calls
+    composer.fill("面向同学，周五举办。参考工作台的校园分享活动。")
+    page.get_by_role("button", name="发送给 AI").click()
+    expect(page.get_by_role("heading", name="校园分享活动通知", exact=True)).to_be_visible(timeout=20000)
+    expect(page.get_by_text("待你确认成稿", exact=True)).to_be_visible()
+    expect(page.get_by_text("请确认报名截止时间。", exact=True)).to_be_visible()
+    expect(page.get_by_text("检索到的工作台素材：校园分享活动", exact=True)).to_be_visible()
+    assert tools == ["ask", "search", "write", "layout", "review", "submit"], tools
+    for action in ("复制 HTML", "保存草稿", "导出 Word"):
+        expect(page.get_by_role("button", name=action, exact=True)).to_be_disabled()
+
+    page.set_viewport_size({"width": 390, "height": 844})
+    assert page.locator("main").evaluate("(el) => el.scrollWidth <= el.clientWidth + 1")
+    if PROOF:
+        page.get_by_role("region", name="稿件确认").scroll_into_view_if_needed()
+        page.screenshot(path=PROOF.replace(".png", "-agent-mobile.png"), animations="disabled")
+    page.set_viewport_size({"width": 1365, "height": 900})
+    page.get_by_role("button", name="确认成稿", exact=True).click()
+    expect(page.get_by_role("region", name="稿件确认").get_by_text("已确认成稿", exact=True)).to_be_visible()
+    with page.expect_download() as event:
+        page.get_by_role("button", name="导出 Word", exact=True).click()
+    assert event.value.suggested_filename == "校园分享活动通知.docx"
+
+    page.reload()
+    go("生成器")
+    page.get_by_role("button", name="历史", exact=True).click()
+    page.get_by_text("校园分享活动通知", exact=True).click()
+    expect(page.get_by_role("region", name="稿件确认").get_by_text("已确认成稿", exact=True)).to_be_visible()
+    composer.fill("请改成邀请家长参加。")
+    page.get_by_role("button", name="发送给 AI").click()
+    expect(page.get_by_role("heading", name="校园分享活动修订稿", exact=True)).to_be_visible(timeout=20000)
+    expect(page.get_by_text("待你确认成稿", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="导出 Word", exact=True)).to_be_disabled()
+    assert tools[-4:] == ["write", "layout", "review", "submit"], tools
 
     narrow = browser.new_page(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
     narrow.on("pageerror", lambda error: errors.append(str(error)))
@@ -128,4 +189,4 @@ with sync_playwright() as playwright:
     assert not errors, errors
     browser.close()
 
-print("PASS: browser startup, local layout, Word download, persistent drafts, image compression, model setup, audit/history, writing dialogue, mobile layout")
+print("PASS: browser startup, local layout, Word download, persistent drafts, image compression, model setup, audit/history, editorial tool loop, human approval, revision, mobile layout")

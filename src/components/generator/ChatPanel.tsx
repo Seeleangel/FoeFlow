@@ -30,6 +30,7 @@ interface ChatPanelProps {
   onDeleteSession: (id: string, e: React.MouseEvent) => void;
   onToggleHistory: () => void;
   onGeneratePreview: (content: string) => void;
+  allowMessagePreview: boolean;
   onRetry: () => void;
   onPreviewInput?: () => void;
   onLayoutTagClick?: (tag: string) => void;
@@ -63,7 +64,7 @@ export default function ChatPanel({
   messages, inputValue, loading, pipelineLoading,
   showHistory, sessions, currentSessionId, chatScrollRef,
   chatError, onInputChange, onSend, onNewSession, onLoadSession,
-  onDeleteSession, onToggleHistory, onGeneratePreview, onRetry,
+  onDeleteSession, onToggleHistory, onGeneratePreview, allowMessagePreview, onRetry,
   onLayoutTagClick, onPreviewInput,
 }: ChatPanelProps) {
   const historyRef = useRef<HTMLDivElement>(null);
@@ -226,7 +227,7 @@ export default function ChatPanel({
                       return m.role === 'assistant' && !m.isHistorical ? <TypewriterText text={m.content} onUpdate={scrollToBottom} /> : m.content;
                     })()}
                   </div>
-                  {m.role === 'assistant' && m.content.length > 50 && !m.content.includes(LAYOUT_TAGS_MARKER) && (
+                  {allowMessagePreview && m.role === 'assistant' && m.content.length > 50 && !m.content.includes(LAYOUT_TAGS_MARKER) && (
                     <div className="flex gap-2 mt-2">
                       <button onClick={() => onGeneratePreview(m.content)}
                         className="text-xs text-brand-600 hover:text-brand-700 transition-all duration-200 font-medium hover:underline flex items-center gap-1 group">

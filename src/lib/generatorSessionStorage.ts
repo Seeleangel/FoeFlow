@@ -1,4 +1,5 @@
 import { getDb } from '@/hooks/useDb';
+import type { EditorialHandoff } from './editorialAgent';
 
 export interface GeneratorSessionState {
   messages: Array<{
@@ -15,6 +16,7 @@ export interface GeneratorSessionState {
   styleSpecJson: string;
   selectedDirectionJson: string;
   selectedTemplateId: string;
+  editorial?: EditorialHandoff;
 }
 
 export interface GeneratorSession {
@@ -70,6 +72,7 @@ function rowToSession(row: GeneratorSessionRow): GeneratorSession {
       styleSpecJson: (parsed.styleSpecJson as string) || '',
       selectedDirectionJson: (parsed.selectedDirectionJson as string) || '',
       selectedTemplateId: row.template_id || '',
+      editorial: (parsed.editorial as EditorialHandoff | undefined),
     },
     createdAt: row.created_at,
     updatedAt: row.created_at,

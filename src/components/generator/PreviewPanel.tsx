@@ -1,6 +1,7 @@
 import { isWebApp } from '@/lib/platform';
 import { safeArticleHtml } from '@/lib/safeArticleHtml';
-import { FileText, Copy, Download, Loader2, CheckCircle2, Sparkles, Search } from 'lucide-react';
+import type { EditorialHandoff } from '@/lib/editorialAgent';
+import { FileText, Copy, Download, Loader2, CheckCircle2, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { LayoutControls } from '@/components/LayoutControls';
 import ArticlePipeline from '@/components/article-pipeline/ArticlePipeline';
@@ -71,6 +72,11 @@ interface PreviewPanelProps {
   selectedTemplateName: string;
   selectedTemplateId: string;
 
+  editorial?: EditorialHandoff;
+  canConfirm: boolean;
+  outputLocked: boolean;
+  onConfirmFinal: () => void;
+
   // Actions
   onCopyHtml: () => void;
   onSaveDraft: () => void;
@@ -85,6 +91,7 @@ export default function PreviewPanel({
   layoutFeedbackState, onLayoutRefineRequest,
   onLayoutAnalyze, onLayoutDirectionSelect, onStyleSpecChange,
   generatedHtml, generatedText,
+  editorial, canConfirm, outputLocked, onConfirmFinal,
   onCopyHtml, onSaveDraft, onExportWord,
 }: PreviewPanelProps) {
   const [analyzingMsg, analyzeIdx] = useRotatingMessage(LAYOUT_ANALYZING_MESSAGES, layoutStage ?? 'idle');
@@ -116,7 +123,7 @@ export default function PreviewPanel({
               <FileText className="w-5 h-5 text-green-600 animate-pulse-slow" />
               <span className="text-lg">生成结果</span>
             </div>
-            <div className="flex items-center gap-3">
+            {!editorial && <div className="flex items-center gap-3">
               <LayoutControls
                 onAnalyze={onLayoutAnalyze}
                 onRequestRefine={onLayoutRefineRequest}
@@ -127,9 +134,20 @@ export default function PreviewPanel({
                 stage={layoutStage}
                 feedbackActive={layoutFeedbackState !== 'idle'}
               />
-            </div>
+            </div>}
           </div>
-          <div className="p-7 space-y-6">
+          <div className="space-y-6 p-4 sm:p-7">
+            {editorial && (
+              <section aria-label="稿件确认" className="space-y-2 rounded-lg border border-stone-200 bg-stone-50 p-4 text-sm text-stone-700">
+                <p role="status" className="font-semibold text-stone-900">{editorial.status === 'confirmed' ? '已确认成稿' : '待你确认成稿'}</p>
+                {editorial.status === 'pending' && <p>核对正文、排版和事实后确认。如需改动，在对话中告诉 Agent。</p>}
+                {editorial.notes.length > 0 && <>
+                  <p className="font-medium">需人工核对</p>
+                  <ul className="list-disc space-y-1 break-words pl-5">{editorial.notes.map((note, index) => <li key={index}>{note}</li>)}</ul>
+                </>}
+                {editorial.sources.length > 0 && <p className="break-words">检索到的工作台素材：{editorial.sources.join('、')}</p>}
+              </section>
+            )}
             <div>
               {/* Phase 1: Style Spec Review + Direction Selection */}
               {styleSpec && !selectedDirection && (
@@ -285,14 +303,12 @@ export default function PreviewPanel({
                     <div className="space-y-0">
                       <StepRow
                         index={0}
-                        icon={Search}
                         label="分析文章风格"
                         done={layoutStage !== 'analyzing'}
                         active={layoutStage === 'analyzing'}
                       />
                       <StepRow
                         index={1}
-                        icon={Sparkles}
                         label="生成排版效果"
                         done={false}
                         active={layoutStage === 'generating'}
@@ -358,11 +374,17 @@ export default function PreviewPanel({
               )}
             </div>
 
+            {editorial?.status === 'pending' && (
+              <Button onClick={onConfirmFinal} disabled={!canConfirm} className="h-11 bg-red-700 px-4 text-white hover:bg-red-800">
+                <CheckCircle2 className="size-4" aria-hidden="true" /> 确认成稿
+              </Button>
+            )}
             {/* Action buttons — only shown after layout is complete */}
             {(layoutHtml || (isWebApp && generatedHtml)) && (
               <div className="flex flex-wrap gap-3 pt-4 border-t border-stone-100">
                 <Button
                   variant="outline"
+                  disabled={outputLocked}
                   onClick={onCopyHtml}
                   className="flex-1 h-11 rounded-xl hover-lift press-scale transition-all duration-200 group"
                 >
@@ -371,6 +393,7 @@ export default function PreviewPanel({
                 </Button>
                 <Button
                   variant="outline"
+                  disabled={outputLocked}
                   onClick={onSaveDraft}
                   className="flex-1 h-11 rounded-xl hover-lift press-scale transition-all duration-200 group"
                 >
@@ -379,6 +402,7 @@ export default function PreviewPanel({
                 </Button>
                 <Button
                   variant="outline"
+                  disabled={outputLocked}
                   onClick={onExportWord}
                   className="flex-1 h-11 rounded-xl hover-lift press-scale transition-all duration-200 group"
                 >
@@ -406,7 +430,6 @@ export default function PreviewPanel({
 }
 
 function StepRow({
-  icon: _Icon,
   label,
   done,
   active,
@@ -414,7 +437,6 @@ function StepRow({
   index = 0,
   isLast = false,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
   label: string;
   done: boolean;
   active: boolean;
