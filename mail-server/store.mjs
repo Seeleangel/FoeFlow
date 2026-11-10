@@ -14,10 +14,7 @@ export function openStore(path) {
     PRAGMA busy_timeout = 5000;
     CREATE TABLE IF NOT EXISTS accounts (
       id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL, mailbox TEXT
-    ) STRICT;
-    CREATE TABLE IF NOT EXISTS invites (
-      hash TEXT PRIMARY KEY, expires INTEGER NOT NULL
+      password_hash TEXT NOT NULL, mailbox TEXT, workspace_id TEXT
     ) STRICT;
     CREATE TABLE IF NOT EXISTS sessions (
       hash TEXT PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -25,6 +22,19 @@ export function openStore(path) {
     ) STRICT;
     CREATE INDEX IF NOT EXISTS sessions_account ON sessions(account_id);
   `);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (!db.prepare('PRAGMA table_info(accounts)').all().some(({ name }) => name === 'workspace_id')) {
+      db.exec('ALTER TABLE accounts ADD COLUMN workspace_id TEXT');
+    }
+    db.exec(`UPDATE accounts SET workspace_id = lower(hex(randomblob(16))) WHERE workspace_id IS NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS account_workspace ON accounts(workspace_id);`);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    db.close();
+    throw error;
+  }
   return db;
 }
 
@@ -38,13 +48,6 @@ export async function passwordMatches(password, saved) {
   const expected = saved ?? '0'.repeat(32) + ':' + '0'.repeat(64);
   const actual = await hashPassword(password, expected.split(':')[0]);
   return timingSafeEqual(Buffer.from(actual), Buffer.from(expected)) && Boolean(saved);
-}
-
-export function issueInvite(db) {
-  db.prepare('DELETE FROM invites WHERE expires <= ?').run(Date.now());
-  const code = randomBytes(24).toString('base64url');
-  db.prepare('INSERT INTO invites VALUES (?, ?)').run(digest(code), Date.now() + SESSION_SECONDS * 1000);
-  return code;
 }
 
 export function sealMailbox(key, accountId, config) {

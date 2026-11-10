@@ -1,10 +1,14 @@
+import { useState } from 'react';
+import type { WebAccount } from './WebAccountGate';
+import { showToast } from './ui/toaster';
 import { isWebApp, publicAsset } from '@/lib/platform';
-import { FileCheck, PenTool, Library, Settings, Home, Mail } from 'lucide-react';
+import { FileCheck, PenTool, Library, Settings, Home, Mail, LogOut } from 'lucide-react';
 
 interface LayoutProps {
   current: 'dashboard' | 'audit' | 'generator' | 'library' | 'settings' | 'inbox';
   onNavigate: (page: LayoutProps['current']) => void;
   children: React.ReactNode;
+  account?: WebAccount;
 }
 
 const NAV_ITEMS = [
@@ -17,7 +21,16 @@ const NAV_ITEMS = [
   { id: 'settings', label: '设置', icon: Settings },
 ] as const;
 
-export default function Layout({ current, onNavigate, children }: LayoutProps) {
+export default function Layout({ current, onNavigate, children, account }: LayoutProps) {
+  const [signingOut, setSigningOut] = useState(false);
+  async function signOut() {
+    if (!account || signingOut) return;
+    setSigningOut(true);
+    try { await account.signOut(); } catch {
+      setSigningOut(false);
+      showToast('未能退出，请稍后再试。', 'error');
+    }
+  }
   return (
     <div className={`flex h-screen w-full overflow-hidden ${isWebApp ? 'h-dvh flex-col sm:flex-row foe-web' : ''}`} style={{ backgroundColor: '#FAF9F6' }}>
       {/* 侧边导航 */}
@@ -34,6 +47,10 @@ export default function Layout({ current, onNavigate, children }: LayoutProps) {
             <div className="text-sm font-semibold text-stone-900 leading-none truncate">{isWebApp ? 'FoeFlow' : '未来教育引领者'}</div>
             <div className="text-xs text-stone-500 mt-1 truncate">{isWebApp ? '网页版 · 内容工作台' : '公众号管理工具'}</div>
           </div>
+          {account && <div className="ml-auto flex min-w-0 items-center gap-1 sm:hidden">
+            <span className="max-w-20 truncate text-xs text-stone-600">{account.username}</span>
+            <button type="button" title="退出登录" aria-label="退出登录" disabled={signingOut} onClick={signOut} className="rounded p-2 text-stone-700 hover:bg-stone-100"><LogOut className="size-4" /></button>
+          </div>}
         </div>
 
         {/* 导航菜单 - 可滚动 */}
@@ -66,7 +83,11 @@ export default function Layout({ current, onNavigate, children }: LayoutProps) {
 
         {/* 底部信息 - 固定 */}
         <div className={`p-4 border-t border-stone-100 flex-shrink-0 ${isWebApp ? 'hidden sm:block' : ''}`}>
-          <div className="text-xs text-stone-400 text-center">
+          {account && <div className="mb-3 flex items-center justify-between gap-2 text-xs text-stone-600">
+            <span className="min-w-0 truncate">{account.username}</span>
+            <button type="button" disabled={signingOut} onClick={signOut} className="flex shrink-0 items-center gap-1 rounded p-1 hover:bg-stone-100"><LogOut className="size-4" />退出登录</button>
+          </div>}
+          <div className="text-xs text-stone-500 text-center">
             {isWebApp ? '稿件保存在此浏览器' : '华东师范大学教育学部'}
           </div>
         </div>

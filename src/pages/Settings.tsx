@@ -1,3 +1,5 @@
+import { initDb } from '@/hooks/useDb';
+import { currentWebWorkspace } from '@/lib/webWorkspace';
 import { isWebApp } from '@/lib/platform';
 import { callSchoolLLM } from '@/lib/apiClient';
 import { useEffect, useState } from 'react';
@@ -95,6 +97,31 @@ export default function Settings({ onOpenMailbox }: { onOpenMailbox?: () => void
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [legacyAvailable, setLegacyAvailable] = useState(false);
+  const [importing, setImporting] = useState(false);
+
+  useEffect(() => {
+    if (isWebApp) import('@/lib/browserDb').then(({ hasLegacyWorkspace }) => hasLegacyWorkspace()).then(setLegacyAvailable).catch(() => {});
+  }, []);
+
+  async function importLegacy() {
+    const workspace = currentWebWorkspace();
+    if (!workspace || importing) return;
+    setImporting(true);
+    try {
+      const { importLegacyWorkspace } = await import('@/lib/browserDb');
+      await importLegacyWorkspace(workspace);
+      await initDb();
+      const updated = await loadSettings();
+      setSettings(updated);
+      setLegacyAvailable(false);
+      showToast('已导入旧版工作区。模型密钥需重新填写。', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法导入旧版工作区', 'error');
+    } finally {
+      setImporting(false);
+    }
+  }
 
   useEffect(() => {
     loadSettings()
@@ -283,11 +310,17 @@ export default function Settings({ onOpenMailbox }: { onOpenMailbox?: () => void
         </div>
       )}
 
+      {legacyAvailable && <section className="mb-8 rounded-lg border border-stone-200 bg-white p-5">
+        <h2 className="text-base font-semibold text-stone-900">旧版工作区</h2>
+        <p className="mt-2 text-sm text-stone-600">此浏览器有升级前的资料。确认资料属于你后，可将其导入当前空工作区；模型密钥需重新填写。</p>
+        <Button className="mt-3" type="button" variant="outline" disabled={importing} onClick={importLegacy}>导入旧版资料</Button>
+      </section>}
+
       {/* 邮箱配置 */}
       {isWebApp && onOpenMailbox && (
         <section className="mb-8 rounded-lg border border-stone-200 bg-white p-5">
           <h2 className="flex items-center gap-2 text-base font-semibold text-stone-900"><Mail className="size-4 text-amber-600" />163 邮箱配置</h2>
-          <p className="mt-2 text-sm text-stone-600">登录邮件账号后，可连接邮箱并同步未读投稿。</p>
+          <p className="mt-2 text-sm text-stone-600">登录邮件账号后，可连接邮箱并查看全部收件。</p>
           <Button className="mt-3" type="button" variant="outline" onClick={onOpenMailbox}>前往邮件箱</Button>
         </section>
       )}

@@ -14,6 +14,7 @@ import Library from '@/pages/Library';
 import Generator from '@/pages/Generator';
 import Inbox from '@/pages/Inbox';
 import WebInbox from '@/pages/WebInbox';
+import WebAccountGate, { type WebAccount } from '@/components/WebAccountGate';
 
 import WelcomeModal from '@/components/WelcomeModal'
 import LicenseGate from '@/components/LicenseGate';
@@ -42,7 +43,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 
 type ActivationStatus = { active: boolean; code?: string; fingerprint?: string; token?: string; expires_at?: number };
 
-function App() {
+function Workspace({ account }: { account?: WebAccount }) {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState<Parameters<typeof Layout>[0]['current']>(() => isWebApp && window.location.hash === '#mail' ? 'inbox' : 'dashboard');
@@ -146,7 +147,7 @@ function App() {
 
   return (
     <>
-      <Layout current={page} onNavigate={navigateTo}>
+      <Layout current={page} onNavigate={navigateTo} account={account}>
         <ErrorBoundary>
           <div className="h-full" style={{
             opacity: pageFading ? 0 : 1,
@@ -173,4 +174,6 @@ function App() {
   );
 }
 
-export default App;
+export default function App() {
+  return isWebApp ? <WebAccountGate>{(account) => <Workspace account={account} />}</WebAccountGate> : <Workspace />;
+}

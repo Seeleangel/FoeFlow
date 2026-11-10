@@ -1,6 +1,7 @@
 import Database from '@tauri-apps/plugin-sql';
 import { seedBuiltinTemplates } from '@/lib/seedTemplates';
 
+import { currentWebWorkspace } from '@/lib/webWorkspace';
 import { isWebApp } from '@/lib/platform';
 
 type WorkspaceDb = Pick<Database, 'select'> & {
@@ -10,8 +11,10 @@ type WorkspaceDb = Pick<Database, 'select'> & {
 let dbInstance: Promise<WorkspaceDb> | undefined;
 
 export function getDb(): Promise<WorkspaceDb> {
+  const workspace = currentWebWorkspace();
+  if (isWebApp && !workspace) return Promise.reject(new Error('请先登录工作区'));
   return dbInstance ??= (isWebApp
-    ? import('@/lib/browserDb').then(({ openBrowserDb }) => openBrowserDb())
+    ? import('@/lib/browserDb').then(({ openBrowserDb }) => openBrowserDb(workspace!))
     : Database.load('sqlite:foe_publicity.db'))
     .catch((error) => {
       dbInstance = undefined;

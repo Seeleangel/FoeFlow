@@ -2,6 +2,7 @@
 import json
 import os
 import struct
+import secrets
 import zipfile
 import zlib
 
@@ -9,6 +10,18 @@ from playwright.sync_api import expect, sync_playwright
 
 URL = os.environ.get("FOEFLOW_WEB_URL", "http://127.0.0.1:4173/foeflow/")
 PROOF = os.environ.get("FOEFLOW_WEB_SCREENSHOT")
+USERNAME = os.environ.get("FOEFLOW_TEST_USERNAME", "qa_" + secrets.token_hex(5))
+PASSWORD = os.environ.get("FOEFLOW_TEST_PASSWORD", "browser-fixture-password-only")
+
+
+def authenticate(page, signup):
+    expect(page.get_by_role("heading", name="登录 FoeFlow")).to_be_visible()
+    if signup:
+        page.get_by_role("button", name="创建账号").click()
+    page.get_by_label("用户名").fill(USERNAME)
+    page.get_by_label("密码", exact=True).fill(PASSWORD)
+    page.get_by_role("button", name="注册" if signup else "登录", exact=True).click()
+    expect(page.get_by_role("navigation", name="工作区导航")).to_be_visible()
 
 
 def png():
@@ -45,6 +58,7 @@ with sync_playwright() as playwright:
     page.route("**/foeflow/_model/chat/completions", model)
     page.goto(URL)
     page.wait_for_load_state("networkidle")
+    authenticate(page, signup=True)
     nav = page.get_by_role("navigation", name="工作区导航")
     expect(nav.get_by_role("button", name="审核台", exact=True)).to_be_visible(timeout=15000)
     expect(nav.get_by_role("button", name="邮件箱", exact=True)).to_be_visible()
@@ -105,6 +119,7 @@ with sync_playwright() as playwright:
     narrow = browser.new_page(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
     narrow.on("pageerror", lambda error: errors.append(str(error)))
     narrow.goto(URL)
+    authenticate(narrow, signup=False)
     narrow.get_by_role("navigation", name="工作区导航").get_by_role("button", name="生成器").click()
     expect(narrow.get_by_role("textbox", name="写作需求或现有稿件")).to_be_visible()
     assert narrow.locator("main").evaluate("(el) => el.scrollWidth <= el.clientWidth + 1")

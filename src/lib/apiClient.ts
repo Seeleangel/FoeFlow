@@ -1,3 +1,4 @@
+import { currentWebWorkspace } from './webWorkspace';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { loadSettings } from './settingsStorage';
 import { isWebApp } from './platform';
@@ -45,7 +46,11 @@ async function proxyFetch(
     }
     const response = await adapter(requestUrl, {
       ...options, signal: controller.signal,
-      ...(isWebApp ? { credentials: 'omit' as const, redirect: 'error' as const } : {}),
+      ...(isWebApp ? {
+        credentials: requestUrl.startsWith('/') ? 'same-origin' as const : 'omit' as const,
+        redirect: 'error' as const,
+        headers: requestUrl.startsWith('/') ? { ...options.headers, 'X-FoeFlow-Workspace': currentWebWorkspace() ?? '' } : options.headers,
+      } : {}),
     });
     const body = await response.text();
     if (controller.signal.aborted) throw new DOMException('请求已取消', 'AbortError');

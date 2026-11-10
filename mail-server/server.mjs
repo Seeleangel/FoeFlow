@@ -3,10 +3,11 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { digest, hashPassword, openMailbox, openStore, passwordMatches, sealMailbox, SESSION_SECONDS } from './store.mjs';
-import { fetchUnread163 } from './imap.mjs';
+import { fetchInbox163 } from './imap.mjs';
 
 const PREFIX = '/foeflow/mail/';
-const COOKIE = 'foeflow_mail_session';
+const COOKIE = 'foeflow_session';
+const LEGACY_COOKIE = 'foeflow_mail_session';
 
 class HttpError extends Error {
   constructor(status, code) {
@@ -32,7 +33,7 @@ async function jsonBody(req) {
   return body;
 }
 
-export function createMailServer({ dbPath, key, origin, fetchMail = fetchUnread163 }) {
+export function createMailServer({ dbPath, key, origin, fetchMail = fetchInbox163 }) {
   if (!Buffer.isBuffer(key) || key.length !== 32) throw new Error('A 32-byte mailbox encryption key is required');
   const site = new URL(origin);
   if (site.origin !== origin || (site.protocol !== 'https:' && !(site.protocol === 'http:' && site.hostname === '127.0.0.1'))) {
@@ -59,14 +60,22 @@ export function createMailServer({ dbPath, key, origin, fetchMail = fetchUnread1
   }
 
   function session(req) {
-    const token = req.headers.cookie?.split(/; */).find((item) => item.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
+    const cookies = req.headers.cookie?.split(/; */) ?? [];
+    const findToken = (name) => cookies.find((item) => item.startsWith(name + '='))?.slice(name.length + 1);
+    const currentToken = findToken(COOKIE);
+    const token = currentToken ?? findToken(LEGACY_COOKIE);
     if (!token || !/^[\w-]{43}$/.test(token)) return null;
-    return db.prepare(`SELECT a.*, s.hash AS session_hash FROM sessions s
+    const account = db.prepare(`SELECT a.*, s.hash AS session_hash, s.expires AS session_expires FROM sessions s
       JOIN accounts a ON a.id = s.account_id WHERE s.hash = ? AND s.expires > ?`).get(digest(token), Date.now());
+    return account ? { ...account, legacyToken: currentToken ? null : token } : null;
   }
 
   function sessionCookie(res, value, age) {
-    res.setHeader('Set-Cookie', `${COOKIE}=${value}; Path=${PREFIX}; HttpOnly; SameSite=Strict; Max-Age=${age}${site.protocol === 'https:' ? '; Secure' : ''}`);
+    const flags = 'HttpOnly; SameSite=Strict' + (site.protocol === 'https:' ? '; Secure' : '');
+    res.setHeader('Set-Cookie', [
+      `${COOKIE}=${value}; Path=/foeflow/; ${flags}; Max-Age=${age}`,
+      `${LEGACY_COOKIE}=; Path=${PREFIX}; ${flags}; Max-Age=0`,
+    ]);
   }
 
   function startSession(res, accountId) {
@@ -80,14 +89,14 @@ export function createMailServer({ dbPath, key, origin, fetchMail = fetchUnread1
     sessionCookie(res, token, SESSION_SECONDS);
   }
 
-  async function readMailbox(account, config) {
+  async function readMailbox(account, config, page = null, isConfiguration = false) {
     if (mailboxInFlight.has(account.id)) fail(409, 'mailbox_busy');
     if (mailboxInFlight.size >= 8) fail(429, 'slow_down');
-    takeRate('mail:' + account.id, 6, 60_000);
+    takeRate((isConfiguration ? 'mail-config:' : 'mail-read:') + account.id, isConfiguration ? 6 : 20, 60_000);
     mailboxInFlight.add(account.id);
     try {
       try {
-        return { ...await fetchMail(config), syncedAt: new Date().toISOString() };
+        return { ...await fetchMail(config, page), syncedAt: new Date().toISOString() };
       } catch {
         fail(502, 'imap_failed');
       }
@@ -110,8 +119,22 @@ export function createMailServer({ dbPath, key, origin, fetchMail = fetchUnread1
       const action = path.slice(PREFIX.length);
       const account = session(req);
 
+      const expectedWorkspace = req.headers['x-foeflow-workspace'];
+      if (expectedWorkspace && expectedWorkspace !== account?.workspace_id) fail(401, 'sign_in_required');
+
+      if (req.method === 'GET' && action === 'auth') {
+        if (!account) fail(401, 'sign_in_required');
+        res.writeHead(204);
+        return res.end();
+      }
+
       if (req.method === 'GET' && action === 'session') {
-        return reply(200, { username: account?.username ?? null, email: account ? openMailbox(key, account.id, account.mailbox)?.email ?? null : null });
+        if (account?.legacyToken) sessionCookie(res, account.legacyToken, Math.ceil((account.session_expires - Date.now()) / 1000));
+        return reply(200, {
+          username: account?.username ?? null,
+          workspaceId: account?.workspace_id ?? null,
+          email: account ? openMailbox(key, account.id, account.mailbox)?.email ?? null : null,
+        });
       }
 
       if (req.method === 'POST' && (action === 'login' || action === 'register')) {
@@ -127,20 +150,13 @@ export function createMailServer({ dbPath, key, origin, fetchMail = fetchUnread1
         try {
           let id;
           if (action === 'register') {
-            if (typeof body.invite !== 'string' || !/^[\w-]{32}$/.test(body.invite)) fail(400, 'invalid_invite');
-            const hash = digest(body.invite);
-            if (!db.prepare('SELECT 1 FROM invites WHERE hash=? AND expires>?').get(hash, Date.now())) fail(400, 'invalid_invite');
+            takeRate('signup:all', 80, 60 * 60_000);
+            takeRate('signup:ip:' + ip, 4, 60 * 60_000);
             const passwordHash = await hashPassword(password);
-            db.exec('BEGIN IMMEDIATE');
-            try {
-              if (db.prepare('SELECT 1 FROM accounts WHERE username=?').get(username)) fail(409, 'username_taken');
-              if (db.prepare('DELETE FROM invites WHERE hash=? AND expires>?').run(hash, Date.now()).changes !== 1) fail(400, 'invalid_invite');
-              id = db.prepare('INSERT INTO accounts (username,password_hash) VALUES (?,?)').run(username, passwordHash).lastInsertRowid;
-              db.exec('COMMIT');
-            } catch (err) {
-              db.exec('ROLLBACK');
-              throw err;
-            }
+            const created = db.prepare(`INSERT INTO accounts (username,password_hash,workspace_id)
+              VALUES (?,?,?) ON CONFLICT(username) DO NOTHING RETURNING id`).get(username, passwordHash, randomBytes(16).toString('hex'));
+            if (!created) fail(409, 'username_taken');
+            id = created.id;
           } else {
             takeRate('auth:user:' + username, 10, 60_000);
             const saved = db.prepare('SELECT id, password_hash FROM accounts WHERE username=?').get(username);
@@ -155,13 +171,13 @@ export function createMailServer({ dbPath, key, origin, fetchMail = fetchUnread1
         }
       }
 
-      if (!account) fail(401, 'sign_in_required');
-
       if (req.method === 'POST' && action === 'logout') {
-        db.prepare('DELETE FROM sessions WHERE hash=?').run(account.session_hash);
+        if (account) db.prepare('DELETE FROM sessions WHERE hash=?').run(account.session_hash);
         sessionCookie(res, '', 0);
         return reply(200, { ok: true });
       }
+
+      if (!account) fail(401, 'sign_in_required');
 
       if (action === 'mailbox' && req.method === 'DELETE') {
         if (mailboxInFlight.has(account.id)) fail(409, 'mailbox_busy');
@@ -176,16 +192,22 @@ export function createMailServer({ dbPath, key, origin, fetchMail = fetchUnread1
         if (email.length > 120 || !/^[a-z0-9][a-z0-9._-]*@163\.com$/.test(email) ||
             !/^[\x21-\x7e]{6,128}$/.test(authCode)) fail(400, 'invalid_mailbox');
         const config = { email, authCode };
-        const inbox = await readMailbox(account, config);
+        const inbox = await readMailbox(account, config, body.view === 'all' ? 1 : null, true);
         if (!session(req)) fail(401, 'sign_in_required');
         db.prepare('UPDATE accounts SET mailbox=? WHERE id=?').run(sealMailbox(key, account.id, config), account.id);
         return reply(200, { email, inbox });
       }
 
-      if (action === 'sync' && req.method === 'POST') {
+      if ((action === 'sync' || action === 'inbox') && req.method === 'POST') {
+        let page = null;
+        if (action === 'inbox') {
+          const body = await jsonBody(req);
+          if (!Number.isSafeInteger(body.page) || body.page < 1) fail(400, 'invalid_page');
+          page = body.page;
+        }
         const config = openMailbox(key, account.id, account.mailbox);
         if (!config) fail(409, 'mailbox_required');
-        const inbox = await readMailbox(account, config);
+        const inbox = await readMailbox(account, config, page);
         if (!session(req)) fail(401, 'sign_in_required');
         return reply(200, { email: config.email, inbox });
       }
