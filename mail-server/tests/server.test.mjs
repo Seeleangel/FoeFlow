@@ -14,12 +14,16 @@ test('registration, account-scoped mailbox, encrypted storage, and logout', asyn
   const key = randomBytes(32);
   const db = openStore(dbPath);
   const calls = [];
+  const details = [];
   const origin = 'https://foeflow.test';
   const server = createMailServer({ dbPath, key, origin, fetchMail: async (config, page) => {
     calls.push(config);
     if (config.authCode === 'invalid-test-code') throw new Error('provider error that must not escape');
-    return { total: 1, ...(page === null ? {} : { page, pageSize: 30 }), messages: [{ uid: 7, subject: config.email, sender: 'Mock Sender', date: null }] };
-  } });
+    return { total: 1, ...(page === null ? {} : { page, pageSize: 30, uidValidity: '19' }), messages: [{ uid: 7, subject: config.email, sender: 'Mock Sender', date: null }] };
+  }, openMail: async (config, reference, canMark) => {
+    details.push({ email: config.email, reference });
+    return { uid: reference.uid, subject: config.email, isRead: canMark(), body: { format: 'text', content: 'Mailbox detail' }, attachments: [] };
+  }, fetchAttachment: async (_config, reference) => ({ bytes: Buffer.from('attachment-fixture'), name: reference.part + '-稿件.txt' }) });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => {
     await new Promise((resolve) => server.close(resolve));
@@ -34,6 +38,8 @@ test('registration, account-scoped mailbox, encrypted storage, and logout', asyn
   const account = { username: 'alice', password: 'fixture-password-only' };
   const config = { email: 'alice@163.com', authCode: 'fixture-mail-code' };
   assert.equal((await request('sync')).status, 401);
+  assert.equal((await request('message', { body: { uid: 7 } })).status, 401);
+  assert.equal((await request('attachment', { body: { uid: 7 } })).status, 401);
   assert.equal((await request('mailbox', { body: config })).status, 401);
   const signup = await request('register', { body: account });
   assert.equal(signup.status, 200);
@@ -78,6 +84,22 @@ test('registration, account-scoped mailbox, encrypted storage, and logout', asyn
   assert.deepEqual(await failed.json(), { error: 'imap_failed' });
   assert.deepEqual((await (await request('sync', { cookie: alice })).json()).inbox.messages.map((m) => m.subject), ['alice@163.com']);
 
+  const inbox = (await (await request('inbox', { cookie: alice, body: { page: 1 } })).json()).inbox;
+  const reference = { uid: 7, uidValidity: inbox.uidValidity, mailboxVersion: inbox.mailboxVersion };
+  assert.equal((await request('message', { cookie: bob, body: reference })).status, 409);
+  assert.equal((await request('attachment', { cookie: bob, body: { ...reference, part: '2' } })).status, 409);
+  assert.equal((await request('message', { cookie: alice, body: reference, requestOrigin: 'https://foreign.example' })).status, 403);
+  assert.equal(details.length, 0);
+  const detail = await (await request('message', { cookie: alice, body: reference })).json();
+  assert.equal(detail.message.body.content, 'Mailbox detail');
+  assert.equal(detail.message.isRead, true);
+  assert.deepEqual(details, [{ email: 'alice@163.com', reference: { uid: 7, uidValidity: '19' } }]);
+  assert.equal((await request('attachment', { cookie: alice, body: { ...reference, part: '2.HEADER' } })).status, 400);
+  const attachment = await request('attachment', { cookie: alice, body: { ...reference, part: '2' } });
+  assert.equal(attachment.headers.get('Content-Type'), 'application/octet-stream');
+  assert.equal(attachment.headers.get('Cache-Control'), 'no-store');
+  assert.match(attachment.headers.get('Content-Disposition'), /filename\*=UTF-8''2-%E7%A8%BF/);
+  assert.equal(await attachment.text(), 'attachment-fixture');
   assert.equal((await request('mailbox', { method: 'DELETE', cookie: bob })).status, 200);
   assert.equal((await request('sync', { cookie: bob })).status, 409);
   assert.equal((await request('logout', { cookie: alice })).status, 200);

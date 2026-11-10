@@ -64,10 +64,12 @@ def put_legacy_workspace(page):
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
-    context = browser.new_context(viewport={"width": 1365, "height": 900})
+    context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=True)
     first = context.new_page()
     errors = []
     first.on("pageerror", lambda e: errors.append(str(e)))
+    tracked = []
+    first.on("request", lambda request: tracked.append(request.url) if "tracker.invalid" in request.url else None)
     first.goto(url)
     first.wait_for_load_state("networkidle")
     expect(first.get_by_role("navigation", name="工作区导航")).to_have_count(0)
@@ -87,6 +89,27 @@ with sync_playwright() as p:
     expect(first.get_by_role("button", name="下一页")).to_be_disabled()
     first.get_by_role("button", name="立即同步").click()
     expect(first.get_by_text("校园讲座投稿（测试）", exact=True)).to_be_visible()
+
+    first.get_by_role("button", name="未读 校园讲座投稿（测试）", exact=False).click()
+    expect(first.get_by_text("这是测试邮件正文。", exact=True)).to_be_visible()
+    expect(first.get_by_text("为保护隐私，正文不加载远程图片。")).to_be_visible()
+    assert not tracked and first.evaluate("window.mailScriptRan") is None
+    expect(first.get_by_text("无效链接", exact=True)).not_to_have_attribute("href", "javascript:window.mailScriptRan=1")
+    text_file = first.get_by_role("listitem").filter(has_text="投稿资料.txt")
+    with first.expect_download() as download:
+        text_file.get_by_role("button", name="下载", exact=True).click()
+    assert download.value.suggested_filename == "投稿资料.txt"
+    assert download.value.path().read_bytes() == b"fixture data"
+    first.get_by_role("button", name="预览图片").click()
+    expect(first.get_by_role("img", name="稿件插图.png")).to_be_visible()
+    first.get_by_role("button", name="关闭预览").click()
+    if proof:
+        first.screenshot(path=proof)
+    first.get_by_role("button", name="返回收件箱").click()
+    updated = first.get_by_role("listitem").filter(has_text="校园讲座投稿（测试）")
+    expect(updated.get_by_text("已读", exact=True)).to_be_visible()
+    first.get_by_role("button", name="立即同步").click()
+    expect(updated.get_by_text("已读", exact=True)).to_be_visible()
 
     put_legacy_workspace(first)
     go(first, "设置")
@@ -126,4 +149,4 @@ with sync_playwright() as p:
     assert not errors, errors
     browser.close()
 
-print("PASS: app login, all mail, read styling, pagination, legacy import, same-browser account isolation, logout, mobile")
+print("PASS: app login, all mail, detail, downloads, safe HTML, persistent read status, pagination, legacy import, same-browser account isolation, logout, mobile")

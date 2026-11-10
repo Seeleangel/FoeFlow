@@ -3,9 +3,11 @@ import { ChevronLeft, ChevronRight, Inbox, Loader2, Mail, RefreshCw, Settings2, 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { MailApiError, mailRequest, type MailSession, type MailInbox } from '@/lib/webMail';
+import { MailApiError, mailAttachment, mailRequest, type MailSession, type MailInbox, type MailHeader, type MailDetail, type MailAttachment } from '@/lib/webMail';
+import MailMessageView, { previewImageTypes } from '@/components/MailMessageView';
+import { downloadBlob } from '@/lib/browserImage';
 
-type Action = 'mailbox' | 'sync' | 'disconnect';
+type Action = 'mailbox' | 'sync' | 'disconnect' | 'message' | 'attachment';
 type InboxReply = { email: string; inbox: MailInbox };
 const getInbox = (page: number, signal: AbortSignal) =>
   mailRequest<InboxReply>('inbox', { method: 'POST', body: { page }, signal });
@@ -20,6 +22,9 @@ export default function WebInbox() {
   const [inbox, setInbox] = useState<MailInbox>();
   const [configOpen, setConfigOpen] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [opened, setOpened] = useState<MailHeader>();
+  const [detail, setDetail] = useState<MailDetail>();
+  const [preview, setPreview] = useState<{ url: string; name: string }>();
   const [error, setError] = useState('');
   const [pending, setPending] = useState<Action | 'load' | null>('load');
   const inboxHeading = useRef<HTMLHeadingElement>(null);
@@ -58,6 +63,8 @@ export default function WebInbox() {
     void load();
     return () => { requestRef.current?.abort(); requestRef.current = null; };
   }, []);
+
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview.url); }, [preview]);
 
   async function run(action: Action, execute: (signal: AbortSignal) => Promise<void>) {
     if (requestRef.current) return;
@@ -105,6 +112,51 @@ export default function WebInbox() {
     });
   }
 
+  function reference(uid: number) {
+    if (!inbox) throw new Error('收件箱尚未同步');
+    return { uid, uidValidity: inbox.uidValidity, mailboxVersion: inbox.mailboxVersion };
+  }
+
+  function openMessage(message: MailHeader) {
+    if (!inbox || requestRef.current) return;
+    setOpened(message);
+    setDetail(undefined);
+    setPreview(undefined);
+    void run('message', async (signal) => {
+      const reply = await mailRequest<{ message: MailDetail }>('message', {
+        method: 'POST', signal, body: reference(message.uid),
+      });
+      if (signal.aborted) return;
+      setDetail(reply.message);
+      setInbox((current) => current ? {
+        ...current,
+        messages: current.messages.map((header) => header.uid === message.uid ? { ...header, isRead: reply.message.isRead } : header),
+      } : current);
+    });
+  }
+
+  function backToInbox() {
+    requestRef.current?.abort();
+    requestRef.current = null;
+    setPending(null);
+    setOpened(undefined);
+    setDetail(undefined);
+    setPreview(undefined);
+    setError('');
+    requestAnimationFrame(() => inboxHeading.current?.focus());
+  }
+
+  function getAttachment(attachment: MailAttachment, previewOnly = false) {
+    if (!detail || !inbox) return;
+    void run('attachment', async (signal) => {
+      const blob = await mailAttachment({ signal, body: { ...reference(detail.uid), part: attachment.part } });
+      if (signal.aborted) return;
+      if (previewOnly && previewImageTypes.has(attachment.type)) {
+        setPreview({ url: URL.createObjectURL(blob.slice(0, blob.size, attachment.type)), name: attachment.name });
+      } else downloadBlob(blob, attachment.name);
+    });
+  }
+
   function disconnect() {
     void run('disconnect', async (signal) => {
       await mailRequest('mailbox', { method: 'DELETE', signal });
@@ -125,17 +177,17 @@ export default function WebInbox() {
         <div>
           <p className="flex items-center gap-2 text-sm font-medium text-red-800"><Mail className="size-4" aria-hidden="true" /> 163 邮箱</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-stone-900">邮件收件箱</h1>
-          <p className="mt-2 text-sm leading-relaxed text-stone-600">查看全部收件。已读邮件置灰，正文和附件请在 163 邮箱查看。</p>
+          <p className="mt-2 text-sm leading-relaxed text-stone-600">点开邮件查看正文和附件，并同步标为已读。</p>
         </div>
       </header>
 
-      {error && <p role="alert" className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
+      {error && !opened && <p role="alert" className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
 
       {!session && (pending === 'load'
         ? <p role="status" className="text-sm text-stone-500">正在检查登录状态…</p>
         : <Button variant="outline" onClick={() => void load()}>重试</Button>)}
 
-      {session?.username && (
+      {session?.username && !opened && (
         <>
           <section className="rounded-xl border border-stone-200 bg-white p-5 sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -153,7 +205,7 @@ export default function WebInbox() {
               <form className="mt-5 max-w-md space-y-4" onSubmit={connectMailbox}>
                 <Field id="mail-address" label="163 邮箱地址"><Input id="mail-address" name="email" type="email" autoComplete="off" required maxLength={120} defaultValue={session.email ?? ''} placeholder="name@163.com" /></Field>
                 <Field id="mail-code" label="IMAP 授权码"><Input id="mail-code" name="authCode" type="password" autoComplete="off" required maxLength={128} /></Field>
-                <p className="text-xs leading-relaxed text-stone-600">请在 163 邮箱设置中开启 IMAP 并生成授权码。授权码加密保存在服务器，网页只读取收件箱的基本信息，不改动已读状态。</p>
+                <p className="text-xs leading-relaxed text-stone-600">请在 163 邮箱设置中开启 IMAP 并生成授权码。授权码加密保存在服务器，刷新列表不会改动已读状态；打开单封邮件时才会同步标为已读。</p>
                 <div className="flex flex-wrap gap-2">
                   <Button type="submit" disabled={busy} className="bg-red-700 text-white hover:bg-red-800">
                     {pending === 'mailbox' && <Loader2 className="size-4 animate-spin" />}{pending === 'mailbox' ? '正在连接…' : '连接并同步'}
@@ -181,7 +233,8 @@ export default function WebInbox() {
                 <Button variant="outline" onClick={() => refresh(1)} disabled={busy}><RefreshCw className={`size-4 ${busy ? 'animate-spin' : ''}`} />立即同步</Button>
               </div>
               {inbox?.messages.length ? <ul className="divide-y divide-stone-100 overflow-hidden rounded-xl border border-stone-200 bg-white">
-                {inbox.messages.map((message) => <li key={message.uid} className={`px-4 py-4 sm:px-6 ${message.isRead ? 'bg-stone-50 text-stone-600' : 'bg-white text-stone-900'}`}>
+                {inbox.messages.map((message) => <li key={message.uid} className={`${message.isRead ? 'bg-stone-50 text-stone-600' : 'bg-white text-stone-900'}`}>
+                  <button type="button" onClick={() => openMessage(message)} disabled={busy} className="block w-full px-4 py-4 text-left hover:bg-stone-100 focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-red-700 sm:px-6">
                   <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                     <div className="flex min-w-0 flex-1 items-baseline gap-2">
                       <span className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${message.isRead ? 'bg-stone-100 text-stone-600' : 'bg-red-50 font-medium text-red-800'}`}>{message.isRead ? '已读' : '未读'}</span>
@@ -190,6 +243,7 @@ export default function WebInbox() {
                     {message.date && <time dateTime={message.date} className="text-xs text-stone-500">{formatDate(message.date)}</time>}
                   </div>
                   <p className="mt-1 break-words text-sm text-stone-600">{message.sender}</p>
+                  </button>
                 </li>)}
               </ul> : <div className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white p-6 text-sm text-stone-600">
                 <Inbox className="size-5 text-stone-400" aria-hidden="true" />
@@ -208,6 +262,11 @@ export default function WebInbox() {
           )}
         </>
       )}
+      {opened && <MailMessageView
+        header={opened} detail={detail} loading={pending === 'message'} busy={busy} error={error} preview={preview}
+        onBack={backToInbox} onRetry={() => openMessage(opened)} onAttachment={getAttachment}
+        onClosePreview={() => setPreview(undefined)}
+      />}
     </div>
   );
 }

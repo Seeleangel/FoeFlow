@@ -1,9 +1,10 @@
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readFileSync, realpathSync } from 'node:fs';
+import { finished } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { digest, hashPassword, openMailbox, openStore, passwordMatches, sealMailbox, SESSION_SECONDS } from './store.mjs';
-import { fetchInbox163 } from './imap.mjs';
+import { downloadAttachment163, fetchInbox163, MailboxError, openMessage163 } from './imap.mjs';
 
 const PREFIX = '/foeflow/mail/';
 const COOKIE = 'foeflow_session';
@@ -33,7 +34,7 @@ async function jsonBody(req) {
   return body;
 }
 
-export function createMailServer({ dbPath, key, origin, fetchMail = fetchInbox163 }) {
+export function createMailServer({ dbPath, key, origin, fetchMail = fetchInbox163, openMail = openMessage163, fetchAttachment = downloadAttachment163 }) {
   if (!Buffer.isBuffer(key) || key.length !== 32) throw new Error('A 32-byte mailbox encryption key is required');
   const site = new URL(origin);
   if (site.origin !== origin || (site.protocol !== 'https:' && !(site.protocol === 'http:' && site.hostname === '127.0.0.1'))) {
@@ -43,6 +44,7 @@ export function createMailServer({ dbPath, key, origin, fetchMail = fetchInbox16
   const rate = new Map();
   let nextSweep = 0;
   let authInFlight = 0;
+  let attachmentsInFlight = 0;
   const mailboxInFlight = new Set();
 
   function takeRate(key, count, window) {
@@ -89,20 +91,34 @@ export function createMailServer({ dbPath, key, origin, fetchMail = fetchInbox16
     sessionCookie(res, token, SESSION_SECONDS);
   }
 
-  async function readMailbox(account, config, page = null, isConfiguration = false) {
+  async function runMailbox(account, kind, operation) {
     if (mailboxInFlight.has(account.id)) fail(409, 'mailbox_busy');
-    if (mailboxInFlight.size >= 8) fail(429, 'slow_down');
-    takeRate((isConfiguration ? 'mail-config:' : 'mail-read:') + account.id, isConfiguration ? 6 : 20, 60_000);
+    if (mailboxInFlight.size >= 8 || (kind === 'attachment' && attachmentsInFlight >= 2)) fail(429, 'slow_down');
+    takeRate('mail-' + kind + ':' + account.id, { config: 6, read: 20, attachment: 10 }[kind], 60_000);
     mailboxInFlight.add(account.id);
+    if (kind === 'attachment') attachmentsInFlight++;
     try {
-      try {
-        return { ...await fetchMail(config, page), syncedAt: new Date().toISOString() };
-      } catch {
-        fail(502, 'imap_failed');
-      }
+      return await operation();
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      if (error instanceof MailboxError) fail(error.status, error.message);
+      fail(502, 'imap_failed');
     } finally {
       mailboxInFlight.delete(account.id);
+      if (kind === 'attachment') attachmentsInFlight--;
     }
+  }
+
+  async function readMailbox(account, config, page = null, isConfiguration = false) {
+    return { ...await runMailbox(account, isConfiguration ? 'config' : 'read', () => fetchMail(config, page)), syncedAt: new Date().toISOString() };
+  }
+
+  function messageReference(body, mailbox) {
+    if (!Number.isInteger(body.uid) || body.uid < 1 || body.uid > 0xffffffff ||
+        typeof body.uidValidity !== 'string' || !/^[1-9]\d{0,9}$/.test(body.uidValidity) || Number(body.uidValidity) > 0xffffffff ||
+        typeof body.mailboxVersion !== 'string' || !/^[a-f0-9]{64}$/.test(body.mailboxVersion)) fail(400, 'invalid_message');
+    if (body.mailboxVersion !== digest(mailbox)) fail(409, 'stale_message');
+    return { uid: body.uid, uidValidity: body.uidValidity };
   }
 
   const server = createServer(async (req, res) => {
@@ -194,8 +210,9 @@ export function createMailServer({ dbPath, key, origin, fetchMail = fetchInbox16
         const config = { email, authCode };
         const inbox = await readMailbox(account, config, body.view === 'all' ? 1 : null, true);
         if (!session(req)) fail(401, 'sign_in_required');
-        db.prepare('UPDATE accounts SET mailbox=? WHERE id=?').run(sealMailbox(key, account.id, config), account.id);
-        return reply(200, { email, inbox });
+        const sealed = sealMailbox(key, account.id, config);
+        db.prepare('UPDATE accounts SET mailbox=? WHERE id=?').run(sealed, account.id);
+        return reply(200, { email, inbox: { ...inbox, mailboxVersion: digest(sealed) } });
       }
 
       if ((action === 'sync' || action === 'inbox') && req.method === 'POST') {
@@ -209,10 +226,37 @@ export function createMailServer({ dbPath, key, origin, fetchMail = fetchInbox16
         if (!config) fail(409, 'mailbox_required');
         const inbox = await readMailbox(account, config, page);
         if (!session(req)) fail(401, 'sign_in_required');
-        return reply(200, { email: config.email, inbox });
+        return reply(200, { email: config.email, inbox: { ...inbox, mailboxVersion: digest(account.mailbox) } });
+      }
+      if ((action === 'message' || action === 'attachment') && req.method === 'POST') {
+        const config = openMailbox(key, account.id, account.mailbox);
+        if (!config) fail(409, 'mailbox_required');
+        const body = await jsonBody(req);
+        const reference = messageReference(body, account.mailbox);
+        const authorized = () => !res.destroyed && session(req)?.mailbox === account.mailbox;
+        if (action === 'message') {
+          const message = await runMailbox(account, 'read', () => openMail(config, reference, authorized));
+          if (!authorized()) fail(401, 'sign_in_required');
+          return reply(200, { message });
+        }
+        if (typeof body.part !== 'string' || body.part.length > 120 || !/^[1-9]\d*(?:\.[1-9]\d*)*$/.test(body.part)) fail(400, 'invalid_message');
+        await runMailbox(account, 'attachment', async () => {
+          const { bytes, name } = await fetchAttachment(config, { ...reference, part: body.part });
+          if (!authorized()) fail(401, 'sign_in_required');
+          const filename = encodeURIComponent(name).replace(/['()*]/g, (character) => '%' + character.charCodeAt(0).toString(16).toUpperCase());
+          res.setHeader('Content-Type', 'application/octet-stream');
+          res.setHeader('Content-Disposition', `attachment; filename="attachment"; filename*=UTF-8''${filename}`);
+          res.setHeader('Content-Length', bytes.length);
+          res.setTimeout(65_000, () => res.destroy());
+          res.writeHead(200);
+          res.end(bytes);
+          await finished(res, { cleanup: true }).catch(() => { /* Interrupted downloads do not leave data on disk. */ });
+        });
+        return;
       }
       fail(404, 'not_found');
     } catch (err) {
+      if (res.headersSent || res.destroyed) return;
       if (err instanceof HttpError) return reply(err.status, { error: err.message });
       // Do not print request fields, SQL bindings or errors from upstream providers.
       console.error('Mail request failed unexpectedly');
