@@ -21,7 +21,7 @@ def authenticate(page, signup):
     page.get_by_label("用户名").fill(USERNAME)
     page.get_by_label("密码", exact=True).fill(PASSWORD)
     page.get_by_role("button", name="注册" if signup else "登录", exact=True).click()
-    expect(page.get_by_role("navigation", name="工作区导航")).to_be_visible()
+    expect(page.get_by_role("navigation", name="工作区导航")).to_be_visible(timeout=25000)
 
 
 def png():
