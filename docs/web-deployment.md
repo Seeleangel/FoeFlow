@@ -14,7 +14,7 @@ npm run preview:web -- --host 127.0.0.1
 2. 在现有 HTTPS server 中包含 [静态与代理路由](../deploy/foeflow-web.nginx.conf)，把 [模型代理片段](../deploy/foeflow-model-proxy.nginx.conf) 安装到其指定位置。确认服务器将 `.wasm` 作为 `application/wasm` 提供。
 3. 运行 `nginx -t` 后重载。旧发布目录及旧配置留作回退。现有 `/api/v1/` 和 `/admin` 仍由桌面许可证服务负责。
 
-网页以 SQLite WASM 和 IndexedDB 保存本机数据。部署的内容安全策略允许本地脚本编译 WASM。模型地址固定为校内接口时，网页只将聊天和图片生成请求转发给 `chat.ecnu.edu.cn`，带调用者填写的 Bearer 密钥，不注入服务器密钥，不记录转发请求。其他模型从浏览器直接连接，须使用 HTTPS 并允许站点来源的 CORS 请求。模型凭据与草稿留在浏览器，清除该站点数据会移除它们。
+网页以 SQLite WASM 和 IndexedDB 保存本机数据。部署的内容安全策略允许本地脚本编译 WASM。模型代理使用本机 systemd-resolved（127.0.0.53）查询 IPv4 地址；其他主机需换成可信且可达的 DNS 解析器。模型地址固定为校内接口时，网页只将聊天和图片生成请求转发给 `chat.ecnu.edu.cn`，带调用者填写的 Bearer 密钥，不注入服务器密钥，不记录转发请求。其他模型从浏览器直接连接，须使用 HTTPS 并允许站点来源的 CORS 请求。模型凭据与草稿留在浏览器，清除该站点数据会移除它们。
 
 ## 验证
 
