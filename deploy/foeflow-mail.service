@@ -1,0 +1,30 @@
+[Unit]
+Description=FoeFlow browser mailbox
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=foeflow-mail
+Group=foeflow-mail
+WorkingDirectory=/opt/foeflow-mail/current
+EnvironmentFile=/etc/foeflow-mail/server.env
+LoadCredential=mail-key:/etc/foeflow-mail/key
+ExecStart=/opt/foeflow-mail/runtime/node /opt/foeflow-mail/current/server.mjs
+StateDirectory=foeflow-mail
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=320M
+TasksMax=48
+
+[Install]
+WantedBy=multi-user.target

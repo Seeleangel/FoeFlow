@@ -47,7 +47,7 @@ with sync_playwright() as playwright:
     page.wait_for_load_state("networkidle")
     nav = page.get_by_role("navigation", name="工作区导航")
     expect(nav.get_by_role("button", name="审核台", exact=True)).to_be_visible(timeout=15000)
-    expect(nav.get_by_role("button", name="邮件箱", exact=True)).to_have_count(0)
+    expect(nav.get_by_role("button", name="邮件箱", exact=True)).to_be_visible()
 
     def go(name):
         nav.get_by_role("button", name=name, exact=True).click()

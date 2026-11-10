@@ -90,7 +90,7 @@ function ApiKeyGuide() {
   );
 }
 
-export default function Settings() {
+export default function Settings({ onOpenMailbox }: { onOpenMailbox?: () => void }) {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
@@ -284,6 +284,13 @@ export default function Settings() {
       )}
 
       {/* 邮箱配置 */}
+      {isWebApp && onOpenMailbox && (
+        <section className="mb-8 rounded-lg border border-stone-200 bg-white p-5">
+          <h2 className="flex items-center gap-2 text-base font-semibold text-stone-900"><Mail className="size-4 text-amber-600" />163 邮箱配置</h2>
+          <p className="mt-2 text-sm text-stone-600">登录邮件账号后，可连接邮箱并同步未读投稿。</p>
+          <Button className="mt-3" type="button" variant="outline" onClick={onOpenMailbox}>前往邮件箱</Button>
+        </section>
+      )}
       {!isWebApp && <div className="mb-8">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">

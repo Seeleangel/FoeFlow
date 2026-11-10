@@ -37,8 +37,8 @@ export default function Layout({ current, onNavigate, children }: LayoutProps) {
         </div>
 
         {/* 导航菜单 - 可滚动 */}
-        <nav aria-label="工作区导航" className={isWebApp ? "grid grid-cols-5 gap-1 p-2 sm:block sm:flex-1 sm:p-3 sm:space-y-1 sm:overflow-y-auto" : "flex-1 p-3 space-y-1 overflow-y-auto"}>
-          {NAV_ITEMS.filter((item) => !isWebApp || item.id !== 'inbox').map((item) => {
+        <nav aria-label="工作区导航" className={isWebApp ? "grid grid-cols-6 gap-1 p-2 sm:block sm:flex-1 sm:p-3 sm:space-y-1 sm:overflow-y-auto" : "flex-1 p-3 space-y-1 overflow-y-auto"}>
+          {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             const isActive = current === item.id;
             return (

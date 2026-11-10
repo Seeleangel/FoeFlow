@@ -13,6 +13,7 @@ import AuditStation from '@/pages/AuditStation';
 import Library from '@/pages/Library';
 import Generator from '@/pages/Generator';
 import Inbox from '@/pages/Inbox';
+import WebInbox from '@/pages/WebInbox';
 
 import WelcomeModal from '@/components/WelcomeModal'
 import LicenseGate from '@/components/LicenseGate';
@@ -44,7 +45,7 @@ type ActivationStatus = { active: boolean; code?: string; fingerprint?: string; 
 function App() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState<Parameters<typeof Layout>[0]['current']>('dashboard');
+  const [page, setPage] = useState<Parameters<typeof Layout>[0]['current']>(() => isWebApp && window.location.hash === '#mail' ? 'inbox' : 'dashboard');
   const [showWelcome, setShowWelcome] = useState(false)
   const [settings, setSettings] = useState<AppSettings | null>(null)
 
@@ -56,6 +57,9 @@ function App() {
   const navigateTo = (newPage: Parameters<typeof Layout>[0]['current']) => {
     if (newPage === displayPage || pageFading) return;
     setPage(newPage);
+    if (isWebApp && (newPage === 'inbox' || window.location.hash === '#mail')) {
+      window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search + (newPage === 'inbox' ? '#mail' : ''));
+    }
     setPageFading(true);
     setTimeout(() => {
       setDisplayPage(newPage);
@@ -149,7 +153,7 @@ function App() {
             transition: 'opacity 0.15s ease-out',
           }}>
             {displayPage === 'dashboard' && <Dashboard onNavigate={(p) => navigateTo(p)} />}
-            {displayPage === 'settings' && <Settings />}
+            {displayPage === 'settings' && <Settings onOpenMailbox={isWebApp ? () => navigateTo('inbox') : undefined} />}
             {displayPage === 'audit' && <AuditStation />}
             {displayPage === 'library' && (
               <Library
@@ -157,7 +161,7 @@ function App() {
               />
             )}
             {displayPage === 'generator' && <Generator />}
-            {displayPage === 'inbox' && <Inbox />}
+            {displayPage === 'inbox' && (isWebApp ? <WebInbox /> : <Inbox />)}
           </div>
         </ErrorBoundary>
       </Layout>

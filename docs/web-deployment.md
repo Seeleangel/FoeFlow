@@ -6,7 +6,7 @@ npm run build:web
 npm run preview:web -- --host 127.0.0.1
 ```
 
-浏览终端给出的地址加上 `/foeflow/`。网页产物位于 `dist-web/`，与桌面构建的 `dist/` 分开。网页版不连接许可证服务，也无需在服务器运行 Node.js 或保存稿件数据库。
+浏览终端给出的地址加上 `/foeflow/`。网页产物位于 `dist-web/`，与桌面构建的 `dist/` 分开。网页版不连接许可证服务，稿件无需服务器数据库。基础工具只需静态托管；邮件箱另需独立的 Node.js 服务。
 
 ## HTTPS 托管
 
@@ -26,3 +26,17 @@ python3 tests/web/smoke.py
 ```
 
 浏览器验收脚本需安装 Python Playwright 与 Chromium。它覆盖启动、模板排版、Word 导出、刷新后的草稿读取、图片压缩、模型配置、文字审核与写作对话。模型回复用测试数据模拟；不会发送真实密钥、正文或消耗模型额度。可通过 `FOEFLOW_WEB_URL` 指向实际部署地址复验。
+
+## 邮件箱
+
+安装 Node.js 24，运行 `npm ci --prefix mail-server --omit=dev --ignore-scripts`。将 `mail-server/` 发布到独立服务目录，使用 [systemd 模板](../deploy/foeflow-mail.service) 和 [Nginx 路由模板](../deploy/foeflow-mail.nginx.conf)。后端仅监听回环地址，需能通过 TLS 访问 `imap.163.com:993`。使用独立服务用户与私有状态目录。
+
+服务配置 `/etc/foeflow-mail/server.env` 包含 `FOEFLOW_MAIL_DB`（私有 SQLite 路径）、`FOEFLOW_MAIL_ORIGIN`（实际 HTTPS 来源，不带路径）和 `FOEFLOW_MAIL_PORT`（检测出的空闲端口）。生成独立的 32 字节十六进制密钥，保存为 root 私有的 `/etc/foeflow-mail/key`，由 systemd 传入。密钥不能在重部署时重新生成；私有备份数据库及密钥，分别限制访问。邮件授权以 AES-256-GCM 加密保存，登录密码仅保存 scrypt 派生值。服务器不持久保存邮件头、正文或附件。
+
+管理员用服务账号执行以下命令生成单次邀请码，私下交付。邀请码 7 天后过期。邀请注册、登录、设置邮箱和同步均在网页「邮件箱」完成。退出撤销当前会话；解除连接移除保存的邮箱授权，不修改原邮箱。
+
+```sh
+sudo -u foeflow-mail env FOEFLOW_MAIL_DB=/var/lib/foeflow-mail/mail.sqlite   /opt/foeflow-mail/runtime/node /opt/foeflow-mail/current/admin.mjs invite
+```
+
+本地 Web 开发使用 `FOEFLOW_MAIL_DEV_TARGET` 指向本地后端地址，`FOEFLOW_MAIL_ORIGIN` 需匹配浏览器实际来源。运行 `npm test --prefix mail-server` 验证邀请、会话、账户隔离、授权加密及 IMAP 只读协议；浏览器验收用 `tests/web/mail-fixture.mjs` 和 `tests/web/mail.py`，不使用真实授权码。
