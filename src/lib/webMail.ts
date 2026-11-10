@@ -37,6 +37,12 @@ export interface MailDetail extends MailHeader {
   attachments: MailAttachment[];
 }
 
+const mailDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' });
+const previewImageTypes = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+
+export const formatMailDate = (iso: string) => mailDate.format(new Date(iso));
+export const canPreviewMailAttachment = (attachment: MailAttachment) => previewImageTypes.has(attachment.type);
+
 const messages: Record<string, string> = {
   invalid_login: '用户名使用 3–32 位字母、数字、下划线或连字符，密码至少 12 位。',
   username_taken: '这个用户名已被使用，请换一个。',

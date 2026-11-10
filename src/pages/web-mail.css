@@ -1,0 +1,65 @@
+.web-mail [data-slot='button'],
+.web-mail [data-slot='input'] {
+  @apply min-h-11 md:min-h-9;
+}
+
+@media (pointer: coarse) {
+  .web-mail [data-slot='button'],
+  .web-mail [data-slot='input'] {
+    @apply min-h-11;
+  }
+}
+
+.web-mail :where(button, a[href], [tabindex]):focus-visible {
+  outline: 2px solid theme('colors.red.700');
+  outline-offset: 2px;
+}
+
+.web-mail button[id^='web-mail-row-']:focus-visible {
+  outline-offset: -2px;
+}
+
+.web-mail .mail-message-body {
+  @apply max-w-[72ch] overflow-x-auto text-base leading-relaxed text-stone-800;
+  overflow-wrap: anywhere;
+}
+
+.mail-message-body :where(p, ul, ol, blockquote, pre, table) {
+  @apply my-3;
+}
+
+.mail-message-body > :first-child {
+  @apply mt-0;
+}
+
+.mail-message-body > :last-child {
+  @apply mb-0;
+}
+
+.mail-message-body :where(h1, h2, h3, h4) {
+  @apply mb-2 mt-5 font-semibold text-stone-900;
+}
+
+.mail-message-body ul {
+  @apply list-disc pl-6;
+}
+
+.mail-message-body ol {
+  @apply list-decimal pl-6;
+}
+
+.mail-message-body blockquote {
+  @apply rounded-md bg-stone-50 px-4 py-2;
+}
+
+.mail-message-body pre {
+  @apply whitespace-pre-wrap rounded-md bg-stone-50 p-3;
+}
+
+.mail-message-body :where(th, td) {
+  @apply border border-stone-200 px-2 py-1 text-left;
+}
+
+.mail-message-body a[href] {
+  @apply text-red-800 underline underline-offset-2;
+}

@@ -82,7 +82,7 @@ with sync_playwright() as p:
     expect(unread.get_by_text("未读", exact=True)).to_be_visible()
     assert read.evaluate("(node) => getComputedStyle(node).backgroundColor") != unread.evaluate("(node) => getComputedStyle(node).backgroundColor")
     if proof:
-        first.screenshot(path=proof)
+        first.screenshot(path=Path(proof).with_name("收件箱-测试数据.png"))
     first.get_by_role("button", name="下一页").click()
     expect(first.get_by_text("历史投稿 1", exact=True)).to_be_visible()
     expect(first.get_by_text("第 2 / 2 页")).to_be_visible()
@@ -96,18 +96,29 @@ with sync_playwright() as p:
     assert not tracked and first.evaluate("window.mailScriptRan") is None
     expect(first.get_by_text("无效链接", exact=True)).not_to_have_attribute("href", "javascript:window.mailScriptRan=1")
     text_file = first.get_by_role("listitem").filter(has_text="投稿资料.txt")
+    download_button = text_file.get_by_role("button", name="下载 投稿资料.txt", exact=True)
+    first.route("**/mail/attachment", lambda route: route.fulfill(status=404, json={"error": "attachment_missing"}), times=1)
+    download_button.focus()
+    download_button.press("Enter")
+    expect(text_file.get_by_role("alert")).to_have_text("附件不可用。")
+    expect(download_button).to_be_focused()
     with first.expect_download() as download:
-        text_file.get_by_role("button", name="下载", exact=True).click()
+        download_button.press("Enter")
+    expect(text_file.get_by_role("alert")).to_have_count(0)
     assert download.value.suggested_filename == "投稿资料.txt"
     assert download.value.path().read_bytes() == b"fixture data"
-    first.get_by_role("button", name="预览图片").click()
+    preview = first.get_by_role("button", name="预览图片 稿件插图.png")
+    preview.click()
     expect(first.get_by_role("img", name="稿件插图.png")).to_be_visible()
-    first.get_by_role("button", name="关闭预览").click()
+    expect(first.get_by_role("button", name="关闭预览")).to_be_focused()
+    first.keyboard.press("Escape")
+    expect(preview).to_be_focused()
     if proof:
         first.screenshot(path=proof)
     first.get_by_role("button", name="返回收件箱").click()
     updated = first.get_by_role("listitem").filter(has_text="校园讲座投稿（测试）")
     expect(updated.get_by_text("已读", exact=True)).to_be_visible()
+    expect(updated.get_by_role("button")).to_be_focused()
     first.get_by_role("button", name="立即同步").click()
     expect(updated.get_by_text("已读", exact=True)).to_be_visible()
 
@@ -146,6 +157,15 @@ with sync_playwright() as p:
     sign_in(narrow, "first_test")
     expect(narrow.get_by_text("校园讲座投稿（测试）", exact=True)).to_be_visible()
     assert narrow.locator("main").evaluate("(el) => el.scrollWidth <= el.clientWidth + 1")
+    if proof:
+        narrow.screenshot(path=Path(proof).with_name("手机收件箱-测试数据.png"))
+    narrow.get_by_role("button", name="已读 校园讲座投稿（测试）", exact=False).tap()
+    expect(narrow.get_by_text("这是测试邮件正文。", exact=True)).to_be_visible()
+    mobile_download = narrow.get_by_role("button", name="下载 投稿资料.txt", exact=True)
+    assert mobile_download.bounding_box()["height"] >= 44
+    assert narrow.locator("main").evaluate("(el) => el.scrollWidth <= el.clientWidth + 1")
+    if proof:
+        narrow.screenshot(path=Path(proof).with_name("手机邮件详情-测试数据.png"))
     assert not errors, errors
     browser.close()
 
