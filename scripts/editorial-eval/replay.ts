@@ -38,7 +38,7 @@ export function sourcePortForCase(c:EvalCase):SourcePort {
 }
 export function redact<T>(value:T,secrets:string[]=[]):T {
  const clean=(v:unknown):unknown=>{
-  if(typeof v==='string'){let s=v;for(const secret of secrets.filter(Boolean).sort((a,b)=>b.length-a.length))s=s.split(secret).join('[REDACTED]');return s.replace(/Bearer\s+[A-Za-z0-9._~+/-]+/gi,'Bearer [REDACTED]');}
+  if(typeof v==='string'){let s=v;for(const secret of secrets.filter(Boolean).sort((a,b)=>b.length-a.length))for(const encoded of new Set([secret,JSON.stringify(secret).slice(1,-1)]))s=s.split(encoded).join('[REDACTED]');return s.replace(/Bearer\s+[A-Za-z0-9._~+/-]+/gi,'Bearer [REDACTED]');}
   if(Array.isArray(v))return v.map(clean);
   if(v&&typeof v==='object')return Object.fromEntries(Object.entries(v).map(([k,x])=>[k,/^(authorization|proxy-authorization|api[_-]?key|key|password|cookie|set-cookie|access[_-]?token)$/i.test(k)?'[REDACTED]':clean(x)]));return v;
  };return clean(value) as T;
@@ -50,7 +50,9 @@ export async function runCase(c:EvalCase,o:{mode:'mock'|'real';model:EditorialMo
  const r:CaseResult={id:c.id,runId:o.runId,trial:o.trial,cancelled:false,modelCalls:0,legacyModelCalls:null,trace:[],outputs:[],checkpoints:[],privateSpans:[],operatorPlanRequired:c.input.operator_events.length>0&&!o.recipe?.actions,unappliedFollowups:c.input.followups.length};
  let session=o.recipe?.initialSession?EditorialSessionSchema.parse(o.recipe.initialSession):createEditorialSession('eval-'+hashText(o.runId+':'+o.trial).slice(0,24));
  const sources=sourcePortForCase(c);const abort=new AbortController();const cancel=()=>abort.abort();o.signal?.addEventListener('abort',cancel,{once:true});if(o.signal?.aborted)abort.abort();
- const checkpoint=(s:EditorialSession)=>{session=s;r.checkpoints.push({hash:hashText(stableJson(s)),revision:s.revision});r.privateSpans.push(...s.claims.filter(x=>x.visibility!=='public').flatMap(x=>[x.value,...x.statusBasis.map(ref=>ref.quote)]));};
+ const protect=(s:EditorialSession)=>{r.privateSpans.push(...s.claims.filter(x=>x.visibility!=='public').flatMap(x=>[x.value,...x.statusBasis.map(ref=>ref.quote)]),...(s.editorialNotes??[]).map(n=>n.text),...(s.candidate?.editorialNotes??[]).map(n=>n.text));};
+ protect(session);
+ const checkpoint=(s:EditorialSession)=>{session=s;r.checkpoints.push({hash:hashText(stableJson(s)),revision:s.revision});protect(s);};
  const cancelAfter=o.recipe?.actions?.find((a):a is Extract<EvalAction,{type:'cancel'}>=>a.type==='cancel')?.afterCalls;
  const model:EditorialModelPort=async(req,signal)=>{
   r.modelCalls++;r.trace.push({type:'model_request',stage:req.stage,input:req.data});
@@ -84,7 +86,7 @@ export async function runCase(c:EvalCase,o:{mode:'mock'|'real';model:EditorialMo
   if(r.outcome)r.outcome={...r.outcome,session};
  }catch(e){if(e && typeof e==='object' && 'name' in e && e.name==='AbortError')r.cancelled=true;else r.error=e instanceof Error&&e.message.startsWith('fixture_error:')?e.message:'runner_action_failed';}
  finally{o.signal?.removeEventListener('abort',cancel);}
- r.privateSpans=[...new Set(r.privateSpans)];return r;
+ protect(session);r.privateSpans=[...new Set(r.privateSpans)];return r;
 }
 export function originalStageResponses(c:EvalCase):Record<string,ReplayReply[]> {
  const responses:Record<string,ReplayReply[]>={};

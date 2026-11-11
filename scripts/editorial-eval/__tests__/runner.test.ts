@@ -2,7 +2,7 @@ import {expect,it,vi} from 'vitest';
 import {StageReplay,parseCaseFile,parseRecipes,sourcePortForCase,modelInput,redact,runCase} from '../replay';
 import {caseMetrics} from '../metrics';
 import {verifyHash,configSummary} from '../manifest';
-import {hashText} from '../../../src/lib/editorialTypes';
+import {hashText,createEditorialSession} from '../../../src/lib/editorialTypes';
 const fixture={id:'X01',input:{setup:'HARNESS ONLY',initial_message:'Publish a public note.',fixtures:[{id:'private-fixture-id',title:'Source',text:'Source body',location:'article library'}],followups:[],operator_events:[]},oracle:{end_state:'pending',checks:[{id:'oracle-only',criterion:'Judge the actual result.',required:true,evidence:'outcome'}]}};
 it('stage queues are independent, preserve order, report leftovers and never fall back',async()=>{const q=new StageReplay({decide:['d1','d2'],write:['w1']});expect(await q.call({stage:'write',data:{}},new AbortController().signal)).toBe('w1');expect(await q.call({stage:'decide',data:{}},new AbortController().signal)).toBe('d1');expect(q.remaining()).toEqual({decide:1,write:0});await expect(q.call({stage:'preflight',data:{}},new AbortController().signal)).rejects.toThrow('fixture_error:preflight')});
 it('validates frozen JSONL, duplicate IDs and schema/hash failures before any network',()=>{expect(parseCaseFile(JSON.stringify(fixture))).toHaveLength(1);expect(()=>parseCaseFile(JSON.stringify(fixture)+'\n'+JSON.stringify(fixture))).toThrow('duplicate');expect(()=>parseCaseFile('{}')).toThrow('case_schema');expect(()=>verifyHash('bytes','bad')).toThrow('hash_mismatch');expect(verifyHash('bytes',hashText('bytes'))).toBe(hashText('bytes'))});
@@ -29,4 +29,16 @@ it('dry-run validates config/hash and recipes, writes no secret and never invoke
 
 it('real mode refuses untranslated operator scripts before any paid request',async()=>{
  const {main}=await import('../run'),{mkdtemp,writeFile}=await import('node:fs/promises');const dir=await mkdtemp('.git/editorial-operator-test-');const input={...fixture,input:{...fixture.input,operator_events:['Operator must explicitly choose a branch']}};await writeFile(dir+'/case.jsonl',JSON.stringify(input)+'\n');const spy=vi.spyOn(globalThis,'fetch').mockRejectedValue(Error('no paid call'));await expect(main(['--real','--cases',dir+'/case.jsonl','--out',dir+'/result'],{FOEFLOW_API_KEY:'fake-unit-credential'})).rejects.toThrow('operator_recipe_required');expect(spy).not.toHaveBeenCalled();spy.mockRestore();
+});
+
+it('persisted CLI artifacts omit known editor-only notes but retain public output evidence',async()=>{
+ const {main}=await import('../run'),{mkdtemp,readFile}=await import('node:fs/promises');const dir=await mkdtemp('.git/editorial-note-redaction-');const spy=vi.spyOn(console,'log').mockImplementation(()=>{});
+ try{await main(['--mock','--cases','scripts/editorial-eval/fixtures/smoke-v1.cases.jsonl','--recipe','scripts/editorial-eval/fixtures/smoke-v1.recipe.json','--out',dir+'/run'],{});const trace=await readFile(dir+'/run/SAMPLE01-1.json','utf8');expect(trace).not.toContain('SAMPLE-INTERNAL-ONLY');expect(trace).toContain('Sample public body.');expect(await readFile(dir+'/run/assertions.json','utf8')).not.toContain('SAMPLE-INTERNAL-ONLY');}finally{spy.mockRestore()}
+});
+it('initial restored notes are protected even when no model turn or checkpoint executes',async()=>{
+ const session=createEditorialSession('restored-eval');session.editorialNotes=[{id:'old-note',kind:'process',text:'RESTORED-EDITOR-ONLY',relatedIds:[]}];const result=await runCase({...fixture,input:{...fixture.input,initial_message:null}},{mode:'mock',model:async()=>{throw Error('no call allowed')},runId:'restore',trial:1,recipe:{initialSession:session,actions:[]}});expect(result.modelCalls).toBe(0);expect(result.privateSpans).toContain('RESTORED-EDITOR-ONLY');expect(JSON.stringify(redact(result,result.privateSpans))).not.toContain('RESTORED-EDITOR-ONLY');
+});
+
+it('JSON-escaped protected spans are removed from raw stage responses',()=>{
+ const note='private "editor"\nline';const result=redact({raw:JSON.stringify({editorialNotes:[{text:note}]}),public:'ordinary text'},[note]);expect(result.raw).not.toContain(JSON.stringify(note).slice(1,-1));expect(result.public).toBe('ordinary text');
 });
