@@ -1,16 +1,16 @@
+import { applyEditorVerification } from '@/lib/editorialControls';
 import { isWebApp } from '@/lib/platform';
 import { safeArticleHtml } from '@/lib/safeArticleHtml';
 import { downloadBlob } from '@/lib/browserImage';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAgentRun } from '@/hooks/useAgentRun';
 import { useEditorialSession } from '@/hooks/useEditorialSession';
-import { assertConfirmable, applyControlEvent } from '@/lib/editorialState';
+import { assertConfirmable } from '@/lib/editorialState';
 import { currentInputKey, hashText, type EditorialSession } from '@/lib/editorialTypes';
 import { editorialPreviewFields, requireConfirmedOutput, exportPublicDocumentToDocx } from '@/lib/editorialOutput';
 import { formatQuestion } from '@/lib/editorialGaps';
 import { resolveEditorDiagnostic } from '@/lib/editorialFacts';
 import { applyEditorTaskPatch } from '@/lib/editorialTask';
-import { canHandoff } from '@/lib/editorialController';
 import { editorialStopExplanation } from '@/lib/editorialStatus';
 import { runEditorialAgent, type EditorialHandoff } from '@/lib/editorialAgent';
 import { Button } from '@/components/ui/button';
@@ -725,8 +725,8 @@ export default function Generator() {
   });
   const verifyCriterion = (id:string) => editorChange(s=>{
     if (!s.activeRunId) s.activeRunId='editor-'+crypto.randomUUID();
-    const next=applyControlEvent(s,{type:'human_verified',sessionId:s.sessionId,runId:s.activeRunId,expectedRevision:s.revision,verification:{criterionId:id,inputKey:currentInputKey(s),status:'pass',actor:'editor',verifiedAt:new Date().toISOString()}});
-    next.gate=canHandoff(next); if (!next.gate.blockers.length) next.phase='pending_confirmation';return next;
+    const next=applyEditorVerification(s,{type:'human_verified',sessionId:s.sessionId,runId:s.activeRunId,expectedRevision:s.revision,verification:{criterionId:id,inputKey:currentInputKey(s),status:'pass',actor:'editor',verifiedAt:new Date().toISOString()}});
+    return next;
   });
 
   const handleCopyHtml = () => {

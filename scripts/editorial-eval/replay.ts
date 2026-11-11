@@ -1,3 +1,4 @@
+import {applyEditorVerification} from '../../src/lib/editorialControls';
 import {validateAssertion,validateAssertions,type Assertion,type ExecutionLedger} from './observations';
 import {executionPlan,isAction,type ActionSource,type ApprovedCaseProtocol} from './authority';
 import JSZip from 'jszip';
@@ -82,7 +83,7 @@ export async function runCase(c:EvalCase,o:RunCaseOptions):Promise<CaseResult>{
     if(action.type==='message')await message(action.text);
     else if(action.type==='select'){session={...session,selectedOutput:action.output,revision:session.revision+1};checkpoint(session);}
     else if(action.type==='confirm'){session=applyControlEvent(session,{type:'editor_confirmed',sessionId:session.sessionId,runId:session.activeRunId!,expectedRevision:session.revision,confirmation:{inputKey:currentInputKey(session),htmlHash:session.layout?.htmlHash??'',actor:'editor',confirmedAt:new Date().toISOString()}});checkpoint(session);}
-    else if(action.type==='verify'){session=applyControlEvent(session,{type:'human_verified',sessionId:session.sessionId,runId:session.activeRunId!,expectedRevision:session.revision,verification:{criterionId:action.criterionId,inputKey:currentInputKey(session),actor:'editor',status:'pass',verifiedAt:new Date().toISOString()}});checkpoint(session);}
+    else if(action.type==='verify'){session=applyEditorVerification(session,{type:'human_verified',sessionId:session.sessionId,runId:session.activeRunId!,expectedRevision:session.revision,verification:{criterionId:action.criterionId,inputKey:currentInputKey(session),actor:'editor',status:'pass',verifiedAt:new Date().toISOString()}});checkpoint(session);}
     else if(action.type==='waive'){
      const id='waiver-'+session.evidence.length,text=action.reason;session.evidence.push({id,revision:1,text,contentHash:hashText(text),kind:'editor_message',provenance:{messageId:id},context:{scenario:'unknown'}});
      const refs=[{evidenceId:id,revision:1,start:0,end:text.length,quote:text}];session=applyEditorTaskPatch(session,{baseRevision:session.task.revision,refs,sourceWaivers:[{sourceRequirementId:action.sourceRequirementId,refs,actor:'editor',reason:text}]});checkpoint(session);

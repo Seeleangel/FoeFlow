@@ -111,3 +111,6 @@ For historical setup / prose-script translation, acceptance must obtain independ
 - Cancellation records completed cancel injection and skipped required actions. A cancellation-only assertion cannot mask unexecuted required output. Every planned case × trial gets an artifact/metric row, including interruption. New aggregate statuses `NOT_RUN` and `CANCELLED` keep the denominator fixed; no silent break/removal.
 
 These rules apply in dry-run validation before paid calls as well as runtime scoring. Mechanical assertions remain independently reviewed implementations of oracle criteria, not automatic natural-language adjudication.
+
+## C-M3 editor verification behavior
+A source-bound `verify` action now uses the same trusted version-bound transition as Generator: record the human verdict, recompute `canHandoff` and only enter pending confirmation if the authoritative gate has no blockers. A following explicit `confirm` can then unlock copy/save/Word without a new message (which would invalidate the human verdict). No recipe schema change; wrong/stale criteria, denied assets and unread required sources still block.
