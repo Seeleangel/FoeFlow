@@ -1,3 +1,4 @@
+import { taskContractValid } from './editorialContract';
 import { TaskContractSchema, stableJson, type EditorialSession, type EvidenceRef, type TaskContract, type AcceptanceCriterion } from './editorialTypes';
 import { validRefs } from './editorialFacts';
 import { invalidateEditorialStamps } from './editorialState';
@@ -22,7 +23,10 @@ function patchTask(session: EditorialSession, raw: unknown, authority: 'model' |
     if (authority !== 'editor' && (removing || p.sourceWaivers?.length || p.permittedOmissions?.length)) return reject();
     for (const key of ['objective', 'intents', 'readerAction', 'targetScopes'] as const) {
       if (p[key] === undefined) continue;
-      if (authority !== 'editor' && t.revision > 0 && stableJson(t[key]) !== stableJson(p[key])) return reject();
+      if (authority !== 'editor' && t.revision > 0 && stableJson(t[key]) !== stableJson(p[key])) {
+        const previous = t[key], incoming = p[key];
+        if (!Array.isArray(previous) || !Array.isArray(incoming) || !previous.every(value => incoming.some(next => next === value))) return reject();
+      }
     }
     if (p.objective !== undefined) t.objective = p.objective;
     if (p.intents !== undefined) t.intents = p.intents;
@@ -46,9 +50,10 @@ function patchTask(session: EditorialSession, raw: unknown, authority: 'model' |
     if (authority === 'template' && (p.criteria ?? []).some(c => session.task.criteria.some(old => old.origin === 'user' && (old.id === c.id || old.rule.kind === c.rule.kind)))) return reject();
     if (p.permittedOmissions) t.permittedOmissions = [...t.permittedOmissions, ...p.permittedOmissions];
     if (p.sourceWaivers) t.sourceWaivers = [...t.sourceWaivers, ...p.sourceWaivers];
+    t.coverage = { status: 'validated', refs: p.refs };
     if (stableJson(t) === stableJson(session.task)) return structuredClone(session);
     t.revision++; const checked = TaskContractSchema.parse(t);
-    if (!checked.objective.trim() || !checked.intents.length || !checked.criteria.length && !checked.requirements.length && !checked.requiredSources.length) return reject();
+    if (!taskContractValid(session, checked)) return reject();
     const allIds = [...t.requirements, ...t.requiredSources, ...t.criteria].map(item => item.id);
     if (new Set(allIds).size !== allIds.length || t.criteria.some(c => c.rule.kind === 'length' && (c.rule.min === undefined && c.rule.max === undefined || (c.rule.min ?? 0) > (c.rule.max ?? Infinity))) || t.requiredSources.some(source => !source.selector.documentId && !source.selector.title)) return reject();
     if (t.sourceWaivers.some(w => !t.requiredSources.some(source => source.id === w.sourceRequirementId) || !validRefs(session, w.refs) || w.refs.some(ref => session.evidence.find(e => e.id === ref.evidenceId)?.kind !== 'editor_message')) || t.permittedOmissions.some(o => !t.requirements.some(r => r.id === o.requirementId) || !validRefs(session, o.refs))) return reject();

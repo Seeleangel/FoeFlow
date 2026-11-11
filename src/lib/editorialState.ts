@@ -1,3 +1,6 @@
+import { applyFactPatch } from './editorialFacts';
+import { taskContractValid, taskSnapshotMonotonic } from './editorialContract';
+import { validatePublicArtifact } from './editorialDocument';
 import { artifactContentHash, ControlEventSchema, EditorialSessionSchema, ToolEventSchema, sameEntitySet, hashText, stableJson, type EditorialSession, type EditorialToolEvent, type EditorialControlEvent, type EventEnvelope, currentInputKey, sameInputKey } from './editorialTypes';
 export { currentInputKey, sameInputKey } from './editorialTypes';
 import { validateAcceptance } from './editorialAcceptance';
@@ -40,21 +43,32 @@ export function applyToolEvents(session: EditorialSession, events: readonly Edit
         if (sameEntitySet(s.evidence, records) && sameEntitySet(s.readReceipts, receipts)) break;
         s = invalidateEditorialStamps(s); s.evidence = records; s.readReceipts = receipts; s.evidenceRevision++; break;
       }
-      case 'facts_resolved':
+      case 'facts_resolved': {
+        const validated = applyFactPatch(s, { scopes: e.scopes, claims: e.claims, permissions: e.permissions, ...(e.alignments ? { alignments: e.alignments } : {}) });
+        if (!sameEntitySet(validated.claims, e.claims) || !sameEntitySet(validated.permissions, e.permissions) || !sameEntitySet(validated.scopes, e.scopes) || e.alignments && !sameEntitySet(validated.alignments, e.alignments)) throw new Error('unsafe_fact_snapshot');
+        const diagnostics = e.diagnostics ?? validated.diagnostics;
+        if (!sameEntitySet(s.diagnostics, diagnostics)) { s = invalidateEditorialStamps(s); s.diagnostics = diagnostics; }
         if (sameEntitySet(s.scopes, e.scopes) && sameEntitySet(s.claims, e.claims) && sameEntitySet(s.permissions, e.permissions) && sameEntitySet(s.alignments, e.alignments ?? s.alignments)) break;
         s = invalidateEditorialStamps(s); s.scopes = e.scopes; s.claims = e.claims; s.permissions = e.permissions; s.alignments = e.alignments ?? s.alignments; s.evidenceRevision++; s.policyRevision++; break;
+      }
       case 'task_revised':
+        if (!taskContractValid(s, e.task) || !taskSnapshotMonotonic(s.task, e.task)) throw new Error('invalid_task_contract');
         if (e.task.revision <= s.task.revision) throw new Error('invalid_task_revision');
         if (stableJson({ ...s.task, revision: 0 }) === stableJson({ ...e.task, revision: 0 })) break;
         s = invalidateEditorialStamps(s); s.task = e.task; break;
+      case 'diagnostics_updated': s = invalidateEditorialStamps(s); s.diagnostics = e.diagnostics; break;
+      case 'handoff_ready': assertConfirmable(s); s.phase = 'pending_confirmation'; break;
       case 'gaps_updated': s.gaps = e.gaps; break;
       case 'candidate_updated': {
         if (e.artifact.contentHash !== artifactContentHash(e.artifact.title, e.artifact.bodyMarkdown, e.artifact.assets)) throw new Error('content_key_mismatch');
         if (s.candidate && s.candidate.id === e.artifact.id && e.artifact.revision <= s.candidate.revision) throw new Error('invalid_candidate_revision');
-        s = invalidateEditorialStamps(s); s.candidate = e.artifact; break;
+        s = invalidateEditorialStamps(s); s.candidate = { ...e.artifact, editorialNotes: mergeEditorialNotes(s.candidate?.editorialNotes ?? [], e.artifact.editorialNotes) }; break;
       }
       case 'review_recorded':
-        validContent(s); if (!sameInputKey(e.review.inputKey, currentInputKey(s))) throw new Error('stale_review'); s.review = e.review; s.phase = 'reviewing'; break;
+        validContent(s); if (!sameInputKey(e.review.inputKey, currentInputKey(s))) throw new Error('stale_review'); s.review = e.review; s.phase = 'reviewing';
+        if (s.candidate) s.candidate.editorialNotes = mergeEditorialNotes(s.candidate.editorialNotes, e.review.notes);
+        if (s.candidate?.origin !== 'legacy' && taskContractValid(s) && !validatePublicArtifact(s).length) s.diagnostics = s.diagnostics.filter(d => d.owner !== 'compatibility');
+        break;
       case 'layout_recorded':
         validContent(s); if (e.layout.contentHash !== s.candidate!.contentHash || e.layout.htmlHash !== hashText(e.layout.html)) throw new Error('stale_layout'); s.layout = e.layout; break;
       case 'gate_recorded':
@@ -82,4 +96,11 @@ export function applyControlEvent(session: EditorialSession, event: EditorialCon
 /** The caller persists this exact next snapshot before applying it to UI state. A rejection leaves the old state untouched. */
 export async function persistConfirmation(session: EditorialSession, event: Extract<EditorialControlEvent, { type: 'editor_confirmed' }>, persist: (next: EditorialSession) => Promise<void>): Promise<EditorialSession> {
   const next = applyControlEvent(session, event); await persist(structuredClone(next)); return next;
+}
+
+/** Append-only model metadata ledger. Omitting or rebinding an ID never removes a known restriction. */
+function mergeEditorialNotes(previous: import('./editorialTypes').EditorialNote[], incoming: import('./editorialTypes').EditorialNote[]): import('./editorialTypes').EditorialNote[] {
+  const items = new Map(previous.map(note => [stableJson({ kind: note.kind, text: note.text, relatedIds: [...note.relatedIds].sort() }), note]));
+  for (const note of incoming) { const key = stableJson({ kind: note.kind, text: note.text, relatedIds: [...note.relatedIds].sort() }); if (!items.has(key)) items.set(key, { ...note, id: previous.some(old => old.id === note.id) ? 'note-' + hashText(key).slice(0,24) : note.id }); }
+  return [...items.values()];
 }

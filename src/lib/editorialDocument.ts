@@ -1,5 +1,5 @@
 import { DraftArtifactSchema, artifactContentHash, hashText, stableJson, type EditorialSession, type DraftArtifact, type ContentBlock, type Diagnostics, type EditorialNote, type FactSelector, type PublicDocument, type CriterionRule } from './editorialTypes';
-import { claimPublicationUses, permissionAllows, resolveFacts } from './editorialFacts';
+import { claimPublicationUses, permissionAllows, resolveFacts, canonicalScopeId, hasSubjectPermissions } from './editorialFacts';
 /** v1 line semantics are intentional: a single newline creates a new body paragraph. */
 export function parseContentBlocks(bodyMarkdown: string): ContentBlock[] {
   const occurrences = new Map<string, number>();
@@ -45,8 +45,8 @@ export interface WriterContext {
 }
 /** No conversation, raw enclosing quotes, internal notes or unfiltered evidence enters writer input. */
 export function buildWriterContext(s: EditorialSession, repairCriterionIds: string[] = []): WriterContext {
-  const result = resolveFacts(s); const conflictScopes = new Set(result.conflicts.map(g => g.selector.scopeId));
-  const claims = result.claims.filter(c => c.epistemic === 'supported' && c.visibility === 'public' && !conflictScopes.has(c.selector.scopeId) && !containsProtectedText(s, c.value) && [c.id, c.selector.scopeId].every(subject => !s.permissions.some(p => p.subjectId === subject) || claimPublicationUses(s, subject).every(use => permissionAllows(s, subject, use))));
+  const result = resolveFacts(s); const conflictScopes = new Set(result.conflicts.map(g => canonicalScopeId(s, g.selector.scopeId)));
+  const claims = result.claims.filter(c => c.epistemic === 'supported' && c.visibility === 'public' && !conflictScopes.has(canonicalScopeId(s, c.selector.scopeId)) && !containsProtectedText(s, c.value) && [c.id, c.selector.scopeId].every(subject => !hasSubjectPermissions(s, subject) || claimPublicationUses(s, subject).every(use => permissionAllows(s, subject, use))));
   const current = s.candidate && !containsProtectedText(s, s.candidate.title + s.candidate.bodyMarkdown) ? { title: s.candidate.title, bodyMarkdown: s.candidate.bodyMarkdown } : undefined;
   return { objective: containsProtectedText(s, s.task.objective) ? 'Prepare the public article using the approved claims and constraints.' : s.task.objective,
     intents: [...s.task.intents], claims: claims.map(c => ({ id: c.id, selector: structuredClone(c.selector), value: c.value, evidenceIds: [...new Set(c.refs.map(r => r.evidenceId))] })),
@@ -79,16 +79,17 @@ export function validatePublicArtifact(s: EditorialSession): Diagnostics[] {
   if (!artifact || !DraftArtifactSchema.is(artifact)) return [{ code: 'invalid_artifact', message: 'No valid current candidate.', refs: [] }];
   if (artifact.contentHash !== artifactContentHash(artifact.title, artifact.bodyMarkdown, artifact.assets) || stableJson(artifact.blocks) !== stableJson(parseContentBlocks(artifact.bodyMarkdown))) block('content_integrity', 'Content key and shared parser blocks must match.');
   if (/<[a-z!/?]|^\s*(?:::|```)/im.test(artifact.title + '\n' + artifact.bodyMarkdown)) block('unsafe_content', 'Markup requires revision, never silent stripping.');
-  if (containsProtectedText(s, artifact.title + '\n' + artifact.bodyMarkdown)) block('protected_span', 'Protected source content appears in public prose; revise and re-review.');
-  if (artifact.editorialNotes.some(note => !!publicTextKey(note.text) && publicTextKey(artifact.title + artifact.bodyMarkdown).includes(publicTextKey(note.text)))) block('workflow_note_span', 'An explicit private note was duplicated into public prose; revise without deleting the note.');
+  const publicText = artifact.title + '\n' + publicArtifactBlocks(artifact).map(b => b.text).join('\n') + '\n' + artifact.assets.filter(a => a.state !== 'omitted').map(a => a.publicCaption ?? '').join('\n');
+  if (containsProtectedText(s, publicText)) block('protected_span', 'Protected source content appears in public prose; revise and re-review.');
+  if (artifact.editorialNotes.some(note => !!publicTextKey(note.text) && publicTextKey(publicText).includes(publicTextKey(note.text)))) block('workflow_note_span', 'An explicit private note was duplicated into public prose; revise without deleting the note.');
   const facts = resolveFacts(s); blockers.push(...facts.diagnostics);
   for (const link of artifact.claimLinks) if (!artifact.blocks.some(b => b.id === link.blockId) || link.claimIds.some(id => !facts.claims.some(c => c.id === id && c.epistemic === 'supported' && c.visibility === 'public'))) block('unknown_claim_link', 'Claim links do not attest truth or unknown claims.');
-  const text = artifact.title + '\n' + artifact.bodyMarkdown;
+  const text = publicText;
   for (const claim of facts.claims) {
     const referenced = artifact.claimLinks.some(link => link.claimIds.includes(claim.id)) || publicTextKey(text).includes(publicTextKey(claim.value));
     if (!referenced) continue;
     for (const subject of [claim.id, claim.selector.scopeId]) {
-      if (!s.permissions.some(permission => permission.subjectId === subject)) continue;
+      if (!hasSubjectPermissions(s, subject)) continue;
       if (!claimPublicationUses(s, subject).every(use => permissionAllows(s, subject, use))) block('claim_permission', 'Included claim needs permission for the publication use, independent from truth.');
     }
   }

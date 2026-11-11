@@ -6,8 +6,10 @@ export function normalizeLegacySession(raw: unknown): EditorialSession {
   const outer = object(raw), state = outer.state ? object(outer.state) : outer;
   const text = (v: unknown) => typeof v === 'string' ? v : '';
   const body = text(state.generatedText) || text(outer.content_text) || text(outer.contentText);
-  const html = text(state.generatedHtml) || text(outer.content_html) || text(outer.contentHtml);
-  const title = text(state.generatedTitle) || text(outer.title);
+  const html = text(state.layoutHtml) || text(state.generatedHtml) || text(outer.content_html) || text(outer.contentHtml);
+  let params = object(outer.paramsJson);
+  try { if (typeof outer.params_json === 'string') params = object(JSON.parse(outer.params_json)); } catch { /* damaged metadata does not invent a title */ }
+  const title = text(state.generatedTitle) || text(outer.title) || text(params.title) || body.match(/^# ([^\r\n]+)/)?.[1] || '';
   const handoff = object(state.editorial);
   const damaged = outer.schemaVersion !== undefined || typeof raw === 'string';
   const confirmed = !damaged && handoff.status === 'confirmed' && !!body && !!html;
@@ -15,6 +17,6 @@ export function normalizeLegacySession(raw: unknown): EditorialSession {
   const session = createEditorialSession(text(outer.id) || 'legacy-' + hashText(body + html).slice(0, 20));
   session.legacy = { mode, title, text: body, html, confirmed, originalConfirmation: confirmed ? structuredClone(state.editorial) : undefined, raw: structuredClone(raw) };
   session.phase = body ? 'incomplete' : 'planning';
-  session.diagnostics = [{ code: damaged ? 'legacy_damaged' : 'legacy_requires_validation', message: 'Historical snapshot retained; no v2 review or confirmation granted.', refs: [] }];
+  session.diagnostics = [{ owner: 'compatibility', code: damaged ? 'legacy_damaged' : 'legacy_requires_validation', message: 'Historical snapshot retained; no v2 review or confirmation granted.', refs: [] }];
   return session;
 }

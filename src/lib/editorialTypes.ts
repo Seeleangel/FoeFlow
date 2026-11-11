@@ -6,7 +6,7 @@ export interface EvidenceRecord { id: Id; revision: number; contentHash: Hash; k
 export interface Scope { id: Id; kind: 'event' | 'person' | 'organization' | 'asset' | 'project' | 'other'; label: string; parentId?: Id; qualifiers: { key: string; value: string; refs: EvidenceRef[] }[]; anchors: EvidenceRef[]; identity: 'provisional' | 'aligned' }
 export interface ScopeAlignment { leftId: Id; rightId: Id; refs: EvidenceRef[] }
 export interface MetricSpec { measure: string; unit: string; population: string; phase?: string; period?: string; aggregation: 'single' | 'total' | 'sample' | 'cumulative' | 'unknown'; precision: 'exact' | 'approximate' | 'unknown' }
-export interface FactSelector { scopeId: Id; predicate: string; metric?: MetricSpec }
+export interface FactSelector { scopeId: Id; predicate: string; metric?: MetricSpec; cardinality?: 'single' | 'set'; cardinalityRefs?: EvidenceRef[] }
 export interface FactClaim { id: Id; selector: FactSelector; value: string; refs: EvidenceRef[]; epistemic: 'supported' | 'pending' | 'disputed' | 'unknown'; visibility: 'public' | 'editor_only' | 'private'; statusBasis: EvidenceRef[]; supersedes?: Id[] }
 export interface PermissionUse { channel: string; purpose: string; identity: 'named' | 'anonymous' | 'not_applicable' }
 export interface Permission { id: Id; subjectId: Id; uses: PermissionUse[]; state: 'allowed' | 'denied' | 'unknown' | 'withdrawn'; refs: EvidenceRef[] }
@@ -22,7 +22,7 @@ export type CriterionRule =
 export interface AcceptanceCriterion { id: Id; origin: 'user' | 'template' | 'policy'; refs: EvidenceRef[]; rule: CriterionRule; severity: 'blocking' | 'advisory'; verification: 'deterministic' | 'semantic' | 'human' }
 export interface InformationRequirement { id: Id; selector: FactSelector; label: string; reason: string; refs: EvidenceRef[]; necessity: 'blocking' | 'optional'; resolution: 'supply_fact' | 'select_option' | 'omit_or_replace' }
 export interface SourceWaiver { sourceRequirementId: Id; refs: EvidenceRef[]; actor: 'editor'; reason: string }
-export interface TaskContract { schemaVersion: 2; revision: number; objective: string; intents: ('inform' | 'call_to_action' | 'retrospective' | 'interview' | 'edit' | 'example' | 'other')[]; readerAction?: string; targetScopes: Id[]; requirements: InformationRequirement[]; requiredSources: RequiredSource[]; criteria: AcceptanceCriterion[]; permittedOmissions: { requirementId: Id; refs: EvidenceRef[] }[]; sourceWaivers: SourceWaiver[] }
+export interface TaskContract { schemaVersion: 2; revision: number; objective: string; intents: ('inform' | 'call_to_action' | 'retrospective' | 'interview' | 'edit' | 'example' | 'other')[]; readerAction?: string; targetScopes: Id[]; requirements: InformationRequirement[]; requiredSources: RequiredSource[]; criteria: AcceptanceCriterion[]; permittedOmissions: { requirementId: Id; refs: EvidenceRef[] }[]; sourceWaivers: SourceWaiver[]; coverage?: { status: 'validated' | 'pending'; refs: EvidenceRef[] } }
 export interface Gap { id: Id; requirementId: Id; kind: 'missing' | 'conflict' | 'permission' | 'scope' | 'source_unavailable' | 'plan_ambiguity'; selector: FactSelector; label: string; reason: string; state: 'open' | 'asked' | 'resolved' | 'waived'; blocking: boolean; alternatives: { id: Id; label: string; refs: EvidenceRef[] }[]; resolutionClaimIds: Id[]; askedAtMessageId?: Id }
 export interface QuestionBatch { id: Id; gapIds: Id[]; remainingGapIds?: Id[]; items: { gapId: Id; subject: string; requested: string; why: string; options: string[] }[] }
 export interface EditorialNote { id: Id; kind: 'asset' | 'fact_check' | 'process' | 'advisory'; text: string; relatedIds: Id[] }
@@ -43,7 +43,7 @@ export interface RunBudget { decisions: number; writes: number; searches: number
 export const DEFAULT_RUN_BUDGET: Readonly<RunBudget> = Object.freeze({ decisions: 12, writes: 3, searches: 3, modelCalls: 24, maxNoProgress: 2, maxElapsedMs: 600_000 });
 /** Stable core reason codes. New modules may add domain-specific diagnostic codes. */
 export const EDITORIAL_CODES = Object.freeze({ invalidSchema: 'invalid_schema', staleOwnership: 'stale_ownership', contextCapacity: 'context_capacity', invalidReference: 'invalid_reference', scopeUnresolved: 'scope_unresolved', taskPatchRejected: 'task_patch_rejected', protectedSpan: 'protected_span', assetPermission: 'asset_permission', claimPermission: 'claim_permission', outputNotConfirmed: 'output_not_confirmed', sourceUnavailable: 'source_unavailable', noProgress: 'no_progress', budgetExhausted: 'budget_exhausted' });
-export interface Diagnostics { code: string; message: string; refs: EvidenceRef[] }
+export interface Diagnostics { owner?: string; code: string; message: string; refs: EvidenceRef[] }
 export interface FactResolution { claims: FactClaim[]; conflicts: Gap[]; diagnostics: Diagnostics[]; permissions: Permission[] }
 export interface ProjectionResult { document?: PublicDocument; blockers: Diagnostics[] }
 export interface OutputBundle { document: PublicDocument; layout: LayoutStamp }
@@ -70,8 +70,10 @@ export type ToolAction =
 export interface EventEnvelope { sessionId: Id; runId: Id; expectedRevision: number }
 export type EditorialToolEvent = EventEnvelope & (
   | { type: 'evidence_loaded'; records: EvidenceRecord[]; receipts: ReadReceipt[] }
-  | { type: 'facts_resolved'; scopes: Scope[]; claims: FactClaim[]; permissions: Permission[]; alignments?: ScopeAlignment[] }
+  | { type: 'facts_resolved'; scopes: Scope[]; claims: FactClaim[]; permissions: Permission[]; alignments?: ScopeAlignment[]; diagnostics?: Diagnostics[] }
   | { type: 'task_revised'; task: TaskContract }
+  | { type: 'diagnostics_updated'; diagnostics: Diagnostics[] }
+  | { type: 'handoff_ready' }
   | { type: 'gaps_updated'; gaps: Gap[] }
   | { type: 'candidate_updated'; artifact: DraftArtifact }
   | { type: 'review_recorded'; review: ReviewStamp }
@@ -105,10 +107,10 @@ const evidence = obj({ id, revision: num, contentHash: id, kind: en('editor_mess
 const scope = obj({ id, kind: en('event', 'person', 'organization', 'asset', 'project', 'other'), label: id, parentId: opt(id), qualifiers: arr(obj({ key: id, value: id, refs })), anchors: refs, identity: en('provisional', 'aligned') });
 const alignment = obj({ leftId: id, rightId: id, refs });
 const metric = obj({ measure: id, unit: id, population: id, phase: opt(str), period: opt(str), aggregation: en('single', 'total', 'sample', 'cumulative', 'unknown'), precision: en('exact', 'approximate', 'unknown') });
-const selector = obj({ scopeId: id, predicate: v => id(v) && (v as string).length <= 120, metric: opt(metric) });
+const selector = obj({ scopeId: id, predicate: v => id(v) && (v as string).length <= 120, metric: opt(metric), cardinality: opt(en('single', 'set')), cardinalityRefs: opt(refs) });
 const claim = obj({ id, selector, value: id, refs, epistemic: en('supported', 'pending', 'disputed', 'unknown'), visibility: en('public', 'editor_only', 'private'), statusBasis: refs, supersedes: opt(ids) });
 const permissionUse = obj({ channel: id, purpose: id, identity: en('named', 'anonymous', 'not_applicable') });
-const permission = obj({ id, subjectId: id, uses: arr(permissionUse), state: en('allowed', 'denied', 'unknown', 'withdrawn'), refs });
+const permission = obj({ id, subjectId: id, uses: v => Array.isArray(v) && v.length > 0 && v.every(permissionUse), state: en('allowed', 'denied', 'unknown', 'withdrawn'), refs });
 const source = obj({ id, selector: obj({ documentId: opt(id), title: opt(id) }), purpose: id, refs, depth: en('relevant_excerpt', 'full_document'), state: en('pending', 'satisfied', 'unavailable') });
 const rule = union(
   obj({ kind: en('include_facts'), factIds: ids, location: en('body', 'first_body_paragraph') }),
@@ -118,7 +120,7 @@ const rule = union(
 const criterion = obj({ id, origin: en('user', 'template', 'policy'), refs, rule, severity: en('blocking', 'advisory'), verification: en('deterministic', 'semantic', 'human') });
 const requirement = obj({ id, selector, label: id, reason: id, refs, necessity: en('blocking', 'optional'), resolution: en('supply_fact', 'select_option', 'omit_or_replace') });
 const waiver = obj({ sourceRequirementId: id, refs, actor: en('editor'), reason: id });
-const task = obj({ schemaVersion: en(2), revision: num, objective: str, intents: arr(en('inform', 'call_to_action', 'retrospective', 'interview', 'edit', 'example', 'other')), readerAction: opt(id), targetScopes: ids, requirements: arr(requirement), requiredSources: arr(source), criteria: arr(criterion), permittedOmissions: arr(obj({ requirementId: id, refs })), sourceWaivers: arr(waiver) });
+const task = obj({ schemaVersion: en(2), revision: num, objective: str, intents: arr(en('inform', 'call_to_action', 'retrospective', 'interview', 'edit', 'example', 'other')), readerAction: opt(id), targetScopes: ids, requirements: arr(requirement), requiredSources: arr(source), criteria: arr(criterion), permittedOmissions: arr(obj({ requirementId: id, refs })), sourceWaivers: arr(waiver), coverage: opt(obj({ status: en('validated', 'pending'), refs })) });
 const gap = obj({ id, requirementId: id, kind: en('missing', 'conflict', 'permission', 'scope', 'source_unavailable', 'plan_ambiguity'), selector, label: id, reason: id, state: en('open', 'asked', 'resolved', 'waived'), blocking: bool, alternatives: arr(obj({ id, label: id, refs })), resolutionClaimIds: ids, askedAtMessageId: opt(id) });
 const question = obj({ id, gapIds: ids, remainingGapIds: opt(ids), items: arr(obj({ gapId: id, subject: id, requested: id, why: id, options: arr(str) })) });
 const note = obj({ id, kind: en('asset', 'fact_check', 'process', 'advisory'), text: str, relatedIds: ids });
@@ -133,12 +135,13 @@ const layout = obj({ contentHash: id, themeId: id, themeVersion: id, html: id, h
 const confirmation = obj({ inputKey, htmlHash: id, actor: en('editor'), confirmedAt: id });
 const human = obj({ criterionId: id, inputKey, status: en('pass', 'fail'), actor: en('editor'), verifiedAt: id });
 const receipt = obj({ id, documentId: id, contentHash: id, range: v => Array.isArray(v) && v.length === 2 && v.every(num) && v[1] > v[0], evidenceIds: ids, consumedByStage: en('brief', 'write', 'review'), contextHash: id, sourceRequirementId: opt(id) });
-const diagnostic = obj({ code: id, message: str, refs });
+const diagnostic = obj({ owner: opt(id), code: id, message: str, refs });
 const session = obj({ schemaVersion: en(2), sessionId: id, revision: num, evidenceRevision: num, policyRevision: num, evidence: arr(evidence), readReceipts: arr(receipt), scopes: arr(scope), alignments: arr(alignment), claims: arr(claim), permissions: arr(permission), task, gaps: arr(gap), candidate: opt(draft), review: opt(review), layout: opt(layout), gate: opt(gate), committed: opt(obj({ artifact: draft, layout, confirmation: opt(confirmation) })), phase: en('planning', 'gathering', 'writing', 'reviewing', 'waiting_input', 'pending_confirmation', 'confirmed', 'incomplete', 'failed'), activeRunId: opt(id), lastQuestion: opt(question), lastStop: opt(obj({ code: id, unresolvedIds: ids, nextActions: arr(str) })), diagnostics: arr(diagnostic), humanVerifications: arr(human), legacy: opt(obj({ mode: en('pending', 'confirmed', 'legacy-manual', 'damaged'), title: str, text: str, html: str, confirmed: bool, originalConfirmation: () => true, raw: () => true })), selectedOutput: opt(en('candidate', 'committed', 'legacy')) });
 const envelope = { sessionId: id, runId: id, expectedRevision: num };
 const eventShapes: Record<string, Check>[] = [
   { type: en('evidence_loaded'), records: arr(evidence), receipts: arr(receipt) },
-  { type: en('facts_resolved'), scopes: arr(scope), claims: arr(claim), permissions: arr(permission), alignments: opt(arr(alignment)) },
+  { type: en('facts_resolved'), scopes: arr(scope), claims: arr(claim), permissions: arr(permission), alignments: opt(arr(alignment)), diagnostics: opt(arr(diagnostic)) },
+  { type: en('diagnostics_updated'), diagnostics: arr(diagnostic) }, { type: en('handoff_ready') },
   { type: en('task_revised'), task }, { type: en('gaps_updated'), gaps: arr(gap) }, { type: en('candidate_updated'), artifact: draft },
   { type: en('review_recorded'), review }, { type: en('layout_recorded'), layout }, { type: en('gate_recorded'), gate },
   { type: en('question_recorded'), question }, { type: en('stopped'), phase: en('waiting_input', 'incomplete', 'failed'), code: id, unresolvedIds: ids, nextActions: arr(str) },

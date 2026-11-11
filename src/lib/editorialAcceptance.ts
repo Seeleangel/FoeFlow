@@ -1,7 +1,10 @@
+import { taskContractValid } from './editorialContract';
+import { renderPublicDocument } from './editorialRender';
+import { getAllThemes } from './themeLoader';
 import { artifactContentHash, hashText, type EditorialSession, type GateReport, type GateCheck, type LayoutStamp, type RequiredSource, type FactClaim } from './editorialTypes';
 import { currentInputKey, sameInputKey } from './editorialTypes';
-import { publicArtifactBlocks, validatePublicArtifact } from './editorialDocument';
-import { resolveFacts, permissionAllows, validRefs, sameSelector } from './editorialFacts';
+import { publicArtifactBlocks, validatePublicArtifact, projectPublicArtifact } from './editorialDocument';
+import { resolveFacts, permissionAllows, validRefs, selectorsEquivalent } from './editorialFacts';
 export function visibleBlockText(text: string): string { return text.replace(/^#{1,6}\s+|^>\s+|^(?:[-*]|\d+\.)\s+/g, '').replace(/\*\*(.*?)\*\*|\*(.*?)\*|`(.*?)`/g, '$1$2$3'); }
 const normalized = (text: string) => visibleBlockText(text).normalize('NFKC').replace(/\s+/g, '');
 export function sourceRequirementSatisfied(s: EditorialSession, source: RequiredSource): boolean {
@@ -24,7 +27,10 @@ function renderedBlocks(s: EditorialSession, layout: LayoutStamp): { first?: str
   const blocks = publicArtifactBlocks(s.candidate);
   const unsafe = root.querySelector('script,style,img,iframe,form,input,button,object,embed,link,base') || [...root.body.querySelectorAll<HTMLElement>('*')].some(node => node.hidden || node.style.display === 'none' || node.style.visibility === 'hidden' || node.style.opacity === '0' || [...node.attributes].some(attr => /^on/i.test(attr.name)));
   const article = root.querySelector('article');
-  const valid = !unsafe && !!article && article.children.length === blocks.length + 1 && rendered.length === blocks.length && rendered.every((node, i) => node.getAttribute('data-editorial-block') === blocks[i].id && normalized(node.textContent ?? '') === normalized(blocks[i].text)) && normalized(root.body.textContent ?? '') === normalized(s.candidate.title + blocks.map(b => b.text).join(''));
+  const theme = getAllThemes().find(theme => theme.name === layout.themeId);
+  let canonical = false;
+  try { const expected = theme && renderPublicDocument(projectPublicArtifact(s.candidate), theme); canonical = !!expected && expected.html === layout.html && expected.themeVersion === layout.themeVersion; } catch { /* fail closed */ }
+  const valid = canonical && !unsafe && !!article && article.children.length === blocks.length + 1 && rendered.length === blocks.length && rendered.every((node, i) => node.getAttribute('data-editorial-block') === blocks[i].id && normalized(node.textContent ?? '') === normalized(blocks[i].text)) && normalized(root.body.textContent ?? '') === normalized(s.candidate.title + blocks.map(b => b.text).join(''));
   const firstBlock = blocks.find(b => b.kind === 'paragraph');
   const first = root.querySelector('article p');
   return { valid, first: first && firstBlock && first.getAttribute('data-editorial-block') === firstBlock.id ? first.textContent ?? '' : undefined };
@@ -32,10 +38,10 @@ function renderedBlocks(s: EditorialSession, layout: LayoutStamp): { first?: str
 export function validateAcceptance(s: EditorialSession, layout?: LayoutStamp): GateReport {
   const checks: GateCheck[] = []; const inputKey = currentInputKey(s); const result = resolveFacts(s); const blockers = new Set<string>();
   const add = (id: string, status: GateCheck['status'], detail: string, blocking = true, verifier = 'deterministic') => { checks.push({ criterionId: id, status, detail, verifier }); if (blocking && status !== 'pass') blockers.add(id); };
-  add('task_plan', s.task.objective.trim() && s.task.intents.length && s.task.revision > 0 ? 'pass' : 'unknown', 'Structured objective and intent coverage required.');
+  add('task_plan', taskContractValid(s) ? 'pass' : 'unknown', 'Structured objective and intent coverage required.');
   add('candidate', s.candidate && s.candidate.contentHash === artifactContentHash(s.candidate.title, s.candidate.bodyMarkdown, s.candidate.assets) ? 'pass' : 'unknown', 'Current content revision required.');
   for (const diagnostic of [...s.diagnostics, ...result.diagnostics, ...validatePublicArtifact(s)]) add('diagnostic:' + diagnostic.code, 'unknown', diagnostic.message);
-  for (const gap of result.conflicts) add(gap.id, 'fail', gap.reason);
+  for (const gap of result.conflicts) add(gap.id, 'fail', gap.reason, gap.blocking);
   const rendered = layout ? renderedBlocks(s, layout) : undefined;
   if (rendered) add('layout_integrity', rendered.valid ? 'pass' : 'fail', 'Final visible HTML and block order must match public content.');
   const body = (s.candidate ? publicArtifactBlocks(s.candidate) : []).map(b => visibleBlockText(b.text)).join('\n') ?? '';
@@ -74,7 +80,7 @@ export function validateAcceptance(s: EditorialSession, layout?: LayoutStamp): G
   // Requirements are independently enforced; unrecognised detail cannot close another selector.
   for (const requirement of s.task.requirements) {
     const omitted = s.task.permittedOmissions.some(o => o.requirementId === requirement.id && validRefs(s, o.refs));
-    const supplied = result.claims.some(c => c.epistemic === 'supported' && c.visibility === 'public' && sameSelector(c.selector, requirement.selector));
+    const supplied = result.claims.some(c => c.epistemic === 'supported' && c.visibility === 'public' && selectorsEquivalent(s, c.selector, requirement.selector));
     add('requirement:' + requirement.id, omitted || supplied ? 'pass' : 'unknown', requirement.reason, requirement.necessity === 'blocking');
   }
   return { inputKey, checks, blockers: [...blockers] };

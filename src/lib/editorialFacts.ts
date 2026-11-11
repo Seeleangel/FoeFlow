@@ -5,8 +5,18 @@ export function validateEvidenceRef(s: EditorialSession, ref: EvidenceRef): bool
   return !!source && source.revision === ref.revision && source.contentHash === hashText(source.text) && Number.isInteger(ref.start) && Number.isInteger(ref.end) && ref.start >= 0 && ref.end > ref.start && ref.end <= source.text.length && source.text.slice(ref.start, ref.end) === ref.quote;
 }
 export function validRefs(s: EditorialSession, refs: EvidenceRef[]): boolean { return refs.length > 0 && refs.every(ref => validateEvidenceRef(s, ref)); }
-export function selectorKey(selector: FactSelector, scopeIds?: Map<string, string>): string { return stableJson({ ...selector, scopeId: scopeIds?.get(selector.scopeId) ?? selector.scopeId }); }
+export function selectorKey(selector: FactSelector, scopeIds?: Map<string, string>): string { return stableJson({ predicate: selector.predicate, metric: selector.metric, scopeId: scopeIds?.get(selector.scopeId) ?? selector.scopeId }); }
 export function sameSelector(a: FactSelector, b: FactSelector): boolean { return selectorKey(a) === selectorKey(b); }
+/** Canonical identity is shared by every fact/permission/requirement consumer. Original IDs remain auditable. */
+export function canonicalScopeId(s: EditorialSession, id: string): string { return alignFactScopes(s).scopeIds.get(id) ?? id; }
+export function selectorsEquivalent(s: EditorialSession, a: FactSelector, b: FactSelector): boolean {
+  const ids = alignFactScopes(s).scopeIds; return selectorKey(a, ids) === selectorKey(b, ids);
+}
+function subjectKey(s: EditorialSession, id: string): string {
+  const claim = s.claims.find(c => c.id === id);
+  return claim ? 'claim:' + selectorKey(claim.selector, alignFactScopes(s).scopeIds) + ':' + normalized(claim.value) : 'scope:' + canonicalScopeId(s, id);
+}
+export function hasSubjectPermissions(s: EditorialSession, id: string): boolean { return s.permissions.some(p => subjectKey(s, p.subjectId) === subjectKey(s, id)); }
 const normalized = (s: string) => s.normalize('NFKC').replace(/\s+/g, '');
 function covers(ref: EvidenceRef, anchor: EvidenceRef) { return ref.evidenceId === anchor.evidenceId && ref.revision === anchor.revision && ref.start <= anchor.start && ref.end >= anchor.end; }
 export function alignFactScopes(s: EditorialSession): { scopeIds: Map<string, string>; alignedScopeIds: Set<string>; diagnostics: Diagnostics[] } {
@@ -48,6 +58,7 @@ export function resolveFacts(s: EditorialSession): FactResolution {
     if ((claim.epistemic !== 'supported' && claim.epistemic !== 'unknown' || claim.visibility !== 'public') && !basis) {
       report('missing_status_basis', 'Non-public or uncertain status requires related source evidence; a model label is not authority.', claim.statusBasis); continue;
     }
+    if (claim.selector.cardinality === 'set' && !validRefs(s, claim.selector.cardinalityRefs ?? [])) { report('invalid_cardinality_basis', 'Additive assertions need a grounded cardinality decision.', claim.refs); continue; }
     const legacyRefs = claim.refs.filter(ref => s.evidence.find(e => e.id === ref.evidenceId)?.kind === 'legacy_draft');
     if (legacyRefs.length) {
       const original = legacyRefs.flatMap(ref => s.evidence.find(e => e.id === ref.evidenceId)?.provenance.originClaimIds ?? []).flatMap(id => s.claims.filter(c => c.id === id && c.id !== claim.id && c.epistemic === 'supported' && sameSelector(c.selector, claim.selector) && normalized(c.value) === normalized(claim.value) && validRefs(s, c.refs) && c.refs.every(r => s.evidence.find(e => e.id === r.evidenceId)?.kind !== 'legacy_draft')));
@@ -64,18 +75,23 @@ export function resolveFacts(s: EditorialSession): FactResolution {
   }
   const current = claims.filter(c => !superseded.has(c.id)); const groups = new Map<string, FactClaim[]>(); const conflicts: Gap[] = [];
   const relevant = new Set([...s.task.targetScopes, ...s.task.requirements.map(r => r.selector.scopeId), ...s.candidate?.claimLinks.flatMap(link => link.claimIds.flatMap(id => current.filter(c => c.id === id).map(c => c.selector.scopeId))) ?? []]);
+  const publicText = normalized((s.candidate?.title ?? '') + (s.candidate?.bodyMarkdown ?? '') + (s.candidate?.assets.map(a => a.publicCaption ?? '').join('') ?? ''));
+  for (const claim of current) if (publicText && publicText.includes(normalized(claim.value))) relevant.add(claim.selector.scopeId);
+  for (const criterion of s.task.criteria) if (criterion.rule.kind === 'include_facts') for (const id of criterion.rule.factIds) { const claim = current.find(c => c.id === id); if (claim) relevant.add(claim.selector.scopeId); }
+  const relevantCanonical = new Set([...relevant].map(id => aligned.scopeIds.get(id) ?? id));
   for (const claim of current) {
     const scope = scopes.find(scope => scope.id === claim.selector.scopeId)!;
     const duplicateIdentity = scopes.some(other => other.id !== scope.id && other.kind === scope.kind && stableJson(other.anchors) === stableJson(scope.anchors) && stableJson(other.qualifiers) === stableJson(scope.qualifiers) && aligned.scopeIds.get(other.id) !== aligned.scopeIds.get(scope.id));
     if ((scope.identity === 'provisional' && !aligned.alignedScopeIds.has(scope.id)) || duplicateIdentity) {
-      if (relevant.has(scope.id)) conflicts.push(makeGap(claim, 'scope', [claim.id], [claim.value])); continue;
+      if (relevantCanonical.has(aligned.scopeIds.get(scope.id) ?? scope.id)) conflicts.push(makeGap(claim, 'scope', [claim.id], [claim.value])); continue;
     }
     if (claim.epistemic !== 'supported' && claim.epistemic !== 'disputed') continue;
     const key = selectorKey(claim.selector, aligned.scopeIds); groups.set(key, [...groups.get(key) ?? [], claim]);
   }
   for (const group of groups.values()) {
     const values = [...new Set(group.map(c => normalized(c.value)))];
-    if (values.length > 1 || group.some(c => c.epistemic === 'disputed')) conflicts.push(makeGap({ ...group[0], selector: { ...group[0].selector, scopeId: aligned.scopeIds.get(group[0].selector.scopeId)! } }, 'conflict', group.map(c => c.id), group.map(c => c.value)));
+    const additive = group.every(c => c.selector.cardinality === 'set' && validRefs(s, c.selector.cardinalityRefs ?? []));
+    if (values.length > 1 && !additive || group.some(c => c.epistemic === 'disputed')) conflicts.push({ ...makeGap({ ...group[0], selector: { ...group[0].selector, scopeId: aligned.scopeIds.get(group[0].selector.scopeId)! } }, 'conflict', group.map(c => c.id), group.map(c => c.value)), blocking: relevantCanonical.has(aligned.scopeIds.get(group[0].selector.scopeId) ?? group[0].selector.scopeId) });
   }
   const permissions = s.permissions.filter(p => {
     const valid = PermissionSchema.is(p) && validRefs(s, p.refs) && (scopes.some(scope => scope.id === p.subjectId) || claims.some(c => c.id === p.subjectId));
@@ -85,15 +101,23 @@ export function resolveFacts(s: EditorialSession): FactResolution {
 }
 /** Denied/withdrawn/unknown matching uses cannot be cancelled by a separate allowed record. */
 export function permissionAllows(s: EditorialSession, subjectId: string, use: PermissionUse): boolean {
-  const permissions = resolveFacts(s).permissions.filter(p => p.subjectId === subjectId && p.uses.some(u => stableJson(u) === stableJson(use)));
+  const permissions = resolveFacts(s).permissions.filter(p => subjectKey(s, p.subjectId) === subjectKey(s, subjectId) && p.uses.some(u => stableJson(u) === stableJson(use)));
   return permissions.length > 0 && permissions.every(p => p.state === 'allowed');
 }
 
 /** Evidence-backed upserts; omissions never delete prior claims and invalid changes cannot downgrade them.
  * Preflight-only: this returns a new invalidated session. Runtime integration may instead emit its fact arrays as one facts_resolved event. */
-export function applyFactPatch(session: EditorialSession, raw: unknown): EditorialSession {
+function patchFacts(session: EditorialSession, raw: unknown, authority: 'model' | 'editor'): EditorialSession {
   const next = structuredClone(session);
-  const diagnose = (code: string, message: string) => { next.diagnostics.push({ code, message, refs: [] }); return next; };
+  const touched = new Set<string>(['facts:patch']);
+  if (raw && typeof raw === 'object') for (const key of ['claims', 'scopes', 'permissions'] as const) {
+    const values: unknown = (raw as Record<string, unknown>)[key];
+    if (Array.isArray(values)) for (const value of values) if (value && typeof value === 'object' && typeof value.id === 'string') touched.add('facts:' + key + ':' + value.id);
+  }
+  next.diagnostics = next.diagnostics.filter(d => !d.owner || !touched.has(d.owner));
+  const diagnose = (code: string, message: string, owner = 'facts:patch') => {
+    next.diagnostics = [...next.diagnostics.filter(d => d.code !== code || d.owner !== owner), { owner, code, message, refs: [] }]; return next;
+  };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(key => !['scopes', 'alignments', 'claims', 'permissions'].includes(key))) return diagnose('invalid_fact_patch', 'Expected structured candidate upserts.');
   try {
     const patch = raw as Record<string, unknown>;
@@ -104,20 +128,39 @@ export function applyFactPatch(session: EditorialSession, raw: unknown): Editori
       for (const item of candidates as T[]) { if (!item || typeof item.id !== 'string') throw new Error('invalid_patch'); map.set(item.id, item); }
       return [...map.values()];
     };
-    const candidate = EditorialSessionSchema.parse({ ...next, scopes: merge(next.scopes, patch.scopes), claims: merge(next.claims, patch.claims), permissions: merge(next.permissions, patch.permissions), alignments: patch.alignments === undefined ? next.alignments : [...next.alignments, ...(patch.alignments as EditorialSession['alignments'])] });
-    const resolved = resolveFacts(candidate); next.diagnostics.push(...resolved.diagnostics);
+    const candidate = EditorialSessionSchema.parse({ ...next, scopes: merge(next.scopes, patch.scopes), claims: merge(next.claims, patch.claims), permissions: merge(next.permissions, patch.permissions), alignments: patch.alignments === undefined ? next.alignments : [...new Map([...next.alignments, ...(patch.alignments as EditorialSession['alignments'])].map(item => [stableJson(item), item])).values()] });
+    const resolved = resolveFacts(candidate);
+    for (const diagnostic of resolved.diagnostics) {
+      const owners = ['claims', 'scopes', 'permissions'].flatMap(key => (candidate[key as 'claims' | 'scopes' | 'permissions'] as { id: string; refs?: EvidenceRef[]; anchors?: EvidenceRef[] }[]).filter(item => [...item.refs ?? [], ...item.anchors ?? []].some(ref => diagnostic.refs.some(basis => stableJson(ref) === stableJson(basis)))).map(item => 'facts:' + key + ':' + item.id));
+      for (const owner of owners.length ? owners : ['facts:patch']) next.diagnostics.push({ ...diagnostic, owner });
+    }
     if (resolved.diagnostics.some(d => d.code === 'context_capacity')) return next;
     const claims = new Map(session.claims.map(c => [c.id, c]));
     for (const claim of resolved.claims) {
       const previous = claims.get(claim.id);
-      if (previous && (!sameSelector(previous.selector, claim.selector) || previous.value !== claim.value)) { diagnose('claim_identity_changed', 'Changed assertions require a new ID and targeted supersedes evidence.'); continue; }
+      if (previous && (stableJson(previous.selector) !== stableJson(claim.selector) || previous.value !== claim.value)) { diagnose('claim_identity_changed', 'Changed assertions require a new ID and targeted supersedes evidence.', 'facts:claims:' + claim.id); continue; }
+      if (previous) {
+        const rank = { public: 0, editor_only: 1, private: 2 };
+        const relatedNewBasis = validRefs(candidate, claim.statusBasis) && claim.statusBasis.some(ref =>
+          normalized(ref.quote).includes(normalized(claim.value)) &&
+          ![...previous.refs, ...previous.statusBasis].some(old => old.evidenceId === ref.evidenceId && old.revision === ref.revision && old.start <= ref.start && old.end >= ref.end));
+        if (rank[claim.visibility] < rank[previous.visibility] && (authority !== 'editor' || !relatedNewBasis || claim.statusBasis.some(ref => candidate.evidence.find(e => e.id === ref.evidenceId)?.kind !== 'editor_message'))) {
+          diagnose('declassification_requires_editor', 'Confidentiality relaxation needs a new related editor decision.', 'facts:claims:' + claim.id); continue;
+        }
+        if (previous.epistemic === 'supported' && claim.epistemic !== 'supported' && !relatedNewBasis) {
+          diagnose('status_transition_without_basis', 'An uncertain extraction cannot erase an established assertion.', 'facts:claims:' + claim.id); continue;
+        }
+      }
       claims.set(claim.id, claim);
     }
     next.claims = [...claims.values()]; next.scopes = candidate.scopes; next.alignments = candidate.alignments;
     const permissions = new Map(session.permissions.map(p => [p.id, p]));
     for (const permission of resolved.permissions) {
       const previous = permissions.get(permission.id);
-      if (previous && previous.state !== 'allowed' && permission.state === 'allowed') { diagnose('permission_upgrade_requires_editor', 'Restricted permission cannot be promoted by a model candidate.'); continue; }
+      if (previous && (previous.subjectId !== permission.subjectId || !sameEntitySet(previous.uses, permission.uses))) {
+        diagnose('permission_identity_immutable', 'Permission subject and use history cannot be rebound; create a distinct decision.', 'facts:permissions:' + permission.id); continue;
+      }
+      if (previous && previous.state !== 'allowed' && permission.state === 'allowed' && (authority !== 'editor' || !permission.refs.some(ref => candidate.evidence.find(e => e.id === ref.evidenceId)?.kind === 'editor_message' && !previous.refs.some(old => old.evidenceId === ref.evidenceId && old.revision === ref.revision)))) { diagnose('permission_upgrade_requires_editor', 'Restricted permission cannot be promoted by a model candidate.', 'facts:permissions:' + permission.id); continue; }
       permissions.set(permission.id, permission);
     }
     next.permissions = [...permissions.values()];
@@ -127,8 +170,12 @@ export function applyFactPatch(session: EditorialSession, raw: unknown): Editori
   } catch { return diagnose('invalid_fact_patch', 'Malformed candidate patch; prior facts retained.'); }
 }
 
+export function applyFactPatch(session: EditorialSession, raw: unknown): EditorialSession { return patchFacts(session, raw, 'model'); }
+/** Explicit editor action, never exposed as a model tool. Identity rebinding is still forbidden. */
+export function applyEditorFactPatch(session: EditorialSession, raw: unknown): EditorialSession { return patchFacts(session, raw, 'editor'); }
+
 /** Explicit task use wins; never broaden anonymous permission into named publication. */
 export function claimPublicationUses(s: EditorialSession, subjectId: string): PermissionUse[] {
-  const uses = s.task.criteria.flatMap(c => c.rule.kind === 'permission' && c.rule.subjectIds.includes(subjectId) ? [{ channel: c.rule.channel ?? 'public', purpose: c.rule.use, identity: c.rule.identity ?? 'not_applicable' }] : []);
+  const uses = s.task.criteria.flatMap(c => c.rule.kind === 'permission' && c.rule.subjectIds.some(id => subjectKey(s, id) === subjectKey(s, subjectId)) ? [{ channel: c.rule.channel ?? 'public', purpose: c.rule.use, identity: c.rule.identity ?? 'not_applicable' }] : []);
   return uses.length ? uses : [{ channel: 'public', purpose: 'publication', identity: 'not_applicable' }];
 }

@@ -1,3 +1,4 @@
+import { seedTestTask } from './editorialTestFixtures';
 import { describe, it, expect } from 'vitest';
 import JSZip from 'jszip';
 import { createEditorialSession, hashText, type EditorialSession } from '../editorialTypes';
@@ -9,11 +10,12 @@ import { validateAcceptance } from '../editorialAcceptance';
 import { getDefaultTheme } from '../themeLoader';
 function fixture() {
   const s = startEditorialRun(createEditorialSession('s'), 'r');
-  s.task = { ...s.task, revision: 1, objective: 'Inform readers', intents: ['inform'] };
+  seedTestTask(s);
   s.candidate = parseDraftArtifact(JSON.stringify({ title: 'Public title', bodyMarkdown: 'Public **body**.\nSecond line', editorialNotes: [{ id: 'n', kind: 'process', text: 'INTERNAL-STATE', relatedIds: [] }] }), { id: 'd', revision: 1 }).artifact!;
   return s;
 }
 function ready(s: EditorialSession) {
+  seedTestTask(s);
   const doc = makePublicDocument(s).document!; s.layout = renderPublicDocument(doc, getDefaultTheme()); s.review = { inputKey: currentInputKey(s), issues: [], blocking: [], notes: [] }; s.gate = validateAcceptance(s, s.layout);
   return applyControlEvent(s, { sessionId: s.sessionId, runId: s.activeRunId!, expectedRevision: s.revision, type: 'editor_confirmed', confirmation: { inputKey: currentInputKey(s), htmlHash: s.layout.htmlHash, actor: 'editor', confirmedAt: '2026-11-11T23:00:00+08:00' } });
 }
@@ -91,7 +93,7 @@ describe('public projection and same-version outputs', () => {
     s.permissions[0].state = 'allowed'; expect(makePublicDocument(s).blockers).toEqual([]);
     s.permissions[0].uses[0].identity = 'anonymous'; expect(makePublicDocument(s).document).toBeUndefined();
     s.task.criteria = [{ id: 'anon', origin: 'user', refs: [ref], severity: 'blocking', verification: 'deterministic', rule: { kind: 'permission', subjectIds: ['q'], use: 'publication', channel: 'public', identity: 'anonymous' } }];
-    expect(makePublicDocument(s).blockers).toEqual([]); expect(validateAcceptance(s).blockers).toEqual([]);
+    expect(makePublicDocument(s).blockers).toEqual([]); seedTestTask(s); expect(validateAcceptance(s).blockers).toEqual([]);
   });
   it('asset captions and states are part of the same public content key', () => {
     const raw = { title: 'Title', bodyMarkdown: '{{asset:s}}', assets: [{ assetId: 'a', slotId: 's', use: 'illustration', state: 'included', publicCaption: 'Caption' }] };

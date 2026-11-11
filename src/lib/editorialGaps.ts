@@ -1,5 +1,5 @@
 import { hashText, stableJson, type EditorialSession, type Gap, type QuestionBatch, type EvidenceRef } from './editorialTypes';
-import { resolveFacts, sameSelector, selectorKey, permissionAllows, validRefs } from './editorialFacts';
+import { resolveFacts, selectorsEquivalent, selectorKey, permissionAllows, validRefs } from './editorialFacts';
 import { sourceRequirementSatisfied, sourceWaiver } from './editorialAcceptance';
 import { applyEditorTaskPatch } from './editorialTask';
 export function latestEditorMessageId(s: EditorialSession): string | undefined { return s.evidence.filter(e => e.kind === 'editor_message').slice(-1)[0]?.provenance.messageId; }
@@ -11,12 +11,12 @@ export function deriveGaps(s: EditorialSession): Gap[] {
     gaps.push(gap);
   };
   for (const requirement of s.task.requirements) {
-    const claims = result.claims.filter(c => sameSelector(c.selector, requirement.selector) && c.epistemic === 'supported' && c.visibility === 'public');
-    const conflict = result.conflicts.find(g => sameSelector(g.selector, requirement.selector));
+    const claims = result.claims.filter(c => selectorsEquivalent(s, c.selector, requirement.selector) && c.epistemic === 'supported' && c.visibility === 'public');
+    const conflict = result.conflicts.find(g => selectorsEquivalent(s, g.selector, requirement.selector));
     const omitted = s.task.permittedOmissions.some(o => o.requirementId === requirement.id && validRefs(s, o.refs) && o.refs.every(ref => s.evidence.find(e => e.id === ref.evidenceId)?.kind === 'editor_message'));
     add({ id: 'gap-' + hashText(requirement.id + selectorKey(requirement.selector)).slice(0,24), requirementId: requirement.id, selector: requirement.selector, kind: conflict?.kind ?? 'missing', label: requirement.label, reason: requirement.reason, state: omitted ? 'waived' : claims.length && !conflict ? 'resolved' : 'open', blocking: requirement.necessity === 'blocking', alternatives: conflict?.alternatives ?? (requirement.resolution === 'omit_or_replace' ? [{ id: 'wait', label: '等待补充或授权', refs: [] }, { id: 'replace', label: '由编辑选择已授权替代素材', refs: [] }, { id: 'omit', label: '由编辑明确省略该项', refs: [] }] : []), resolutionClaimIds: claims.map(c => c.id) });
   }
-  for (const conflict of result.conflicts) if (!gaps.some(g => sameSelector(g.selector, conflict.selector) && g.state !== 'resolved')) add(structuredClone(conflict));
+  for (const conflict of result.conflicts) if (!gaps.some(g => selectorsEquivalent(s, g.selector, conflict.selector) && g.state !== 'resolved')) add(structuredClone(conflict));
   for (const criterion of s.task.criteria) {
     if (criterion.rule.kind !== 'permission') continue;
     const rule = criterion.rule;

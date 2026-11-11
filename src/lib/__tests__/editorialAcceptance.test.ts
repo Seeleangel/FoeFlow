@@ -1,3 +1,6 @@
+import { applyTaskPatch } from '../editorialTask';
+import { renderPublicDocument, makePublicDocument } from '../editorialOutput';
+import { getDefaultTheme } from '../themeLoader';
 import { describe, it, expect } from 'vitest';
 import { createEditorialSession, hashText, type AcceptanceCriterion, type DraftArtifact, type EditorialSession, type EvidenceRef } from '../editorialTypes';
 import { parseContentBlocks } from '../editorialDocument';
@@ -9,9 +12,8 @@ function fixture() {
   const ref = (value: string): EvidenceRef => ({ evidenceId: 'e', revision: 1, start: text.indexOf(value), end: text.indexOf(value) + value.length, quote: value });
   s.scopes = [{ id: 'event', kind: 'event', label: 'Event', anchors: [ref('Event')], qualifiers: [], identity: 'aligned' }];
   s.claims = ['Monday', 'Studio'].map((value, i) => ({ id: `c${i}`, selector: { scopeId: 'event', predicate: i ? 'location' : 'time' }, value, refs: [ref(value)], epistemic: 'supported', visibility: 'public', statusBasis: [] }));
-  s.task = { ...s.task, revision: 1, objective: 'Inform readers', intents: ['inform'] };
   const c: AcceptanceCriterion = { id: 'lead', origin: 'user', refs: [ref('Event Monday at Studio.')], severity: 'blocking', verification: 'deterministic', rule: { kind: 'include_facts', factIds: ['c0', 'c1'], location: 'first_body_paragraph' } };
-  s.task.criteria = [c]; setBody(s, ['Monday at Studio.']); return { s, ref, c };
+  Object.assign(s, applyTaskPatch(s, { baseRevision: 0, refs: c.refs, objective: 'Inform readers', intents: ['inform'], criteria: [c] })); setBody(s, ['Monday at Studio.']); return { s, ref, c };
 }
 function setBody(s: EditorialSession, lines: string[], kinds: DraftArtifact['blocks'][number]['kind'][] = lines.map(() => 'paragraph')) {
   const bodyMarkdown = lines.map((line, i) => kinds[i] === 'heading' ? '## ' + line : line).join('\n'); s.candidate = { schemaVersion: 2, id: 'd', revision: 1, title: 'Monday Studio', bodyMarkdown, contentHash: hashText('Monday Studio\n' + bodyMarkdown), blocks: parseContentBlocks(bodyMarkdown), origin: 'model', claimLinks: [], assets: [], editorialNotes: [] };
@@ -24,8 +26,7 @@ describe('acceptance is task-specific and fail closed', () => {
     s.task.criteria = []; expect(validateAcceptance(s).blockers).not.toContain('lead');
   });
   it('checks the actual rendered paragraph and detects stale or altered HTML', () => {
-    const { s } = fixture(); const html = `<article><h1>Monday Studio</h1><p data-editorial-block="${s.candidate!.blocks[0].id}">Monday at Studio.</p></article>`;
-    const layout = { contentHash: s.candidate!.contentHash, themeId: 't', themeVersion: '1', html, htmlHash: hashText(html) };
+    const { s } = fixture(); const layout = renderPublicDocument(makePublicDocument(s).document!, getDefaultTheme());
     expect(validateAcceptance(s, layout).blockers).toEqual([]);
     const changed = '<article><h1>Monday Studio</h1><p data-editorial-block="b0">Monday</p><p>Studio</p></article>';
     expect(validateAcceptance(s, { ...layout, html: changed, htmlHash: hashText(changed) }).blockers.length).toBeGreaterThan(0);
