@@ -118,7 +118,7 @@ function patchFacts(session: EditorialSession, raw: unknown, authority: 'model' 
     const values: unknown = (raw as Record<string, unknown>)[key];
     if (Array.isArray(values)) for (const value of values) if (value && typeof value === 'object' && typeof value.id === 'string') touched.add('facts:' + key + ':' + value.id);
   }
-  next.diagnostics = next.diagnostics.filter(d => !d.owner || !touched.has(d.owner));
+  const successfulOwners=new Set<string>(); // A mention is not a validated repair.
   const diagnose = (code: string, message: string, owner = 'facts:patch') => {
     next.diagnostics = [...next.diagnostics.filter(d => d.code !== code || d.owner !== owner), { owner, code, message, refs: [] }]; return next;
   };
@@ -132,13 +132,19 @@ function patchFacts(session: EditorialSession, raw: unknown, authority: 'model' 
       for (const item of candidates as T[]) { if (!item || typeof item.id !== 'string') throw new Error('invalid_patch'); map.set(item.id, item); }
       return [...map.values()];
     };
+    let schemaInvalid=false;
     for(const [key,schema] of [['claims',FactClaimSchema],['scopes',ScopeSchema],['permissions',PermissionSchema]] as const) {
-      const values=patch[key]; if(values===undefined)continue;
-      if(!Array.isArray(values))return diagnose('invalid_fact_patch','Expected candidate arrays.','facts:operation:'+key);
-      for(const item of values)if(!schema.is(item))return diagnose('invalid_'+key,'Malformed candidate retained as an owned failure.','facts:'+key+':'+(item&&typeof item==='object'&&typeof item.id==='string'?item.id:hashText(stableJson(item)).slice(0,24)));
+      const values=patch[key];if(values===undefined)continue;
+      if(!Array.isArray(values)){diagnose('invalid_fact_patch','Expected candidate arrays.','facts:operation:'+key);schemaInvalid=true;continue;}
+      for(const item of values)if(!schema.is(item)){diagnose('invalid_'+key,'Malformed candidate retained as an owned failure.','facts:'+key+':'+(item&&typeof item==='object'&&typeof item.id==='string'?item.id:hashText(stableJson(item)).slice(0,24)));schemaInvalid=true;}
+    }
+    if(schemaInvalid){
+      // Reject the batch transactionally; no owner is resolved merely by appearing before a malformed peer.
+      for(const owner of touched)if(!next.diagnostics.some(d=>d.owner===owner))diagnose('batch_candidate_not_validated','Candidate was not applied because its batch failed validation; resend this owner or explicitly dismiss it.',owner);
+      return next;
     }
     const candidate = EditorialSessionSchema.parse({ ...next, scopes: merge(next.scopes, patch.scopes), claims: merge(next.claims, patch.claims), permissions: merge(next.permissions, patch.permissions), alignments: patch.alignments === undefined ? next.alignments : [...new Map([...next.alignments, ...(patch.alignments as EditorialSession['alignments'])].map(item => [stableJson(item), item])).values()] });
-    const resolved = resolveFacts(candidate);
+    const resolved = resolveFacts(candidate);const failedOwners=new Set(resolved.diagnostics.map(d=>d.owner));
     for (const diagnostic of resolved.diagnostics) next.diagnostics.push(diagnostic);
     if (resolved.diagnostics.some(d => d.code === 'context_capacity')) return next;
     const claims = new Map(session.claims.map(c => [c.id, c]));
@@ -157,7 +163,7 @@ function patchFacts(session: EditorialSession, raw: unknown, authority: 'model' 
           diagnose('status_transition_without_basis', 'An uncertain extraction cannot erase an established assertion.', 'facts:claims:' + claim.id); continue;
         }
       }
-      claims.set(claim.id, claim);
+      claims.set(claim.id, claim);const owner='facts:claims:'+claim.id;if(touched.has(owner)&&!failedOwners.has(owner))successfulOwners.add(owner);
     }
     next.claims = [...claims.values()]; next.scopes = candidate.scopes; next.alignments = candidate.alignments;
     const permissions = new Map(session.permissions.map(p => [p.id, p]));
@@ -167,9 +173,12 @@ function patchFacts(session: EditorialSession, raw: unknown, authority: 'model' 
         diagnose('permission_identity_immutable', 'Permission subject and use history cannot be rebound; create a distinct decision.', 'facts:permissions:' + permission.id); continue;
       }
       if (previous && previous.state !== 'allowed' && permission.state === 'allowed' && (authority !== 'editor' || !permission.refs.some(ref => candidate.evidence.find(e => e.id === ref.evidenceId)?.kind === 'editor_message' && !previous.refs.some(old => old.evidenceId === ref.evidenceId && old.revision === ref.revision)))) { diagnose('permission_upgrade_requires_editor', 'Restricted permission cannot be promoted by a model candidate.', 'facts:permissions:' + permission.id); continue; }
-      permissions.set(permission.id, permission);
+      permissions.set(permission.id, permission);const owner='facts:permissions:'+permission.id;if(touched.has(owner)&&!failedOwners.has(owner))successfulOwners.add(owner);
     }
     next.permissions = [...permissions.values()];
+    for(const scope of candidate.scopes){const owner='facts:scopes:'+scope.id;if(touched.has(owner)&&!failedOwners.has(owner))successfulOwners.add(owner);}
+    for(const key of ['claims','scopes','permissions'] as const){const items=patch[key];if(Array.isArray(items)&&items.every(item=>successfulOwners.has('facts:'+key+':'+item.id)))successfulOwners.add('facts:operation:'+key);}
+    next.diagnostics=[...new Map(next.diagnostics.filter(d=>!d.owner||!successfulOwners.has(d.owner)).map(d=>[stableJson([d.owner,d.code,d.refs]),d])).values()];
     if (sameEntitySet(next.claims, session.claims) && sameEntitySet(next.scopes, session.scopes) && sameEntitySet(next.permissions, session.permissions) && sameEntitySet(next.alignments, session.alignments)) return next;
     delete next.review; delete next.layout; delete next.gate; next.humanVerifications = []; next.phase = next.candidate ? 'writing' : 'planning'; next.selectedOutput = 'candidate';
     next.evidenceRevision++; next.policyRevision++; next.revision++; return next;
