@@ -52,26 +52,28 @@ with sync_playwright() as playwright:
             data = json.loads(user)
             brief = data["conversation"][-1]["content"]
             if brief == "请帮我准备一篇校园分享推文":
-                action = {"tool": "ask", "question": "请问这篇推文面向哪些读者？"}
+                action = {"tool": "ask", "fields": ["audience"]}
             elif not data["sources"] and not data["previousDraft"]:
                 action = {"tool": "search", "query": "校园分享"}
             elif "draft" not in data:
-                action = {"tool": "write", "instructions": "根据本次需求写作"}
+                action = {"tool": "write", "instructions": "根据本次需求写作", "theme": "warm-editorial"}
             elif not data["layoutReady"]:
                 action = {"tool": "layout", "theme": "warm-editorial"}
             elif "review" not in data:
                 action = {"tool": "review"}
             else:
                 action = {"tool": "submit"}
+            if data["briefRequired"]:
+                action["brief"] = {"mode": "general", "facts": [], "needed": ["audience"] if action["tool"] == "ask" else []}
             tools.append(action["tool"])
             content = json.dumps(action, ensure_ascii=False)
         elif system.startswith("你是公众号写作工具"):
             data = json.loads(user)
             if data["previousDraft"]:
-                content = "# 校园分享活动修订稿\n欢迎家长参加周五的阅读分享。"
+                content = json.dumps({"title": "校园分享活动修订稿", "bodyMarkdown": "欢迎家长参加周五的阅读分享。"}, ensure_ascii=False)
             else:
                 assert any(source["title"] == "校园分享活动" for source in data["sources"])
-                content = "# 校园分享活动通知\n欢迎同学参加周五的阅读分享。"
+                content = json.dumps({"title": "校园分享活动通知", "bodyMarkdown": "欢迎同学参加周五的阅读分享。"}, ensure_ascii=False)
         elif system.startswith("你是公众号审稿工具"):
             content = json.dumps({"blocking": [], "notes": ["请确认报名截止时间。"]}, ensure_ascii=False)
         elif user == "请只回复 OK":
@@ -141,7 +143,7 @@ with sync_playwright() as playwright:
     go("生成器")
     composer.fill("请帮我准备一篇校园分享推文")
     page.get_by_role("button", name="发送给 AI").click()
-    expect(page.get_by_text("请问这篇推文面向哪些读者？", exact=True)).to_be_visible()
+    expect(page.get_by_text("请确认稿件需要的参与对象。", exact=True)).to_be_visible()
     assert len(calls) == 3, calls
     composer.fill("面向同学，周五举办。参考工作台的校园分享活动。")
     page.get_by_role("button", name="发送给 AI").click()
@@ -149,7 +151,7 @@ with sync_playwright() as playwright:
     expect(page.get_by_text("待你确认成稿", exact=True)).to_be_visible()
     expect(page.get_by_text("请确认报名截止时间。", exact=True)).to_be_visible()
     expect(page.get_by_text("检索到的工作台素材：校园分享活动", exact=True)).to_be_visible()
-    assert tools == ["ask", "search", "write", "layout", "review", "submit"], tools
+    assert tools == ["ask", "search", "write", "layout", "review"], tools
     for action in ("复制 HTML", "保存草稿", "导出 Word"):
         expect(page.get_by_role("button", name=action, exact=True)).to_be_disabled()
 
@@ -175,7 +177,7 @@ with sync_playwright() as playwright:
     expect(page.get_by_role("heading", name="校园分享活动修订稿", exact=True)).to_be_visible(timeout=20000)
     expect(page.get_by_text("待你确认成稿", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="导出 Word", exact=True)).to_be_disabled()
-    assert tools[-4:] == ["write", "layout", "review", "submit"], tools
+    assert tools[-3:] == ["write", "layout", "review"], tools
 
     narrow = browser.new_page(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
     narrow.on("pageerror", lambda error: errors.append(str(error)))
