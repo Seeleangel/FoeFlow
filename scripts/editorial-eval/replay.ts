@@ -44,27 +44,36 @@ export function sourcePortForCase(c:EvalCase):SourcePort {
 export {redact} from './artifactSafety';
 export type EvalAction=({type:'message';text:string}|{type:'confirm'}|{type:'verify';criterionId:string}|{type:'waive';sourceRequirementId:string;reason:string}|{type:'select';output:'committed'|'candidate'|'legacy'}|{type:'cancel';afterCalls:number}|{type:'copy'|'save'|'word'})&{source?:ActionSource};
 export interface Recipe {initialSession?:EditorialSession;initialMessage?:string;actions?:EvalAction[];responses?:Record<string,ReplayReply[]>;assertions?:Assertion[]}
-export interface CaseResult {execution?:ExecutionLedger;restoration?:{phase:string;sessionHash:string;selectedOutput?:string};id:string;runId:string;trial:number;outcome?:EditorialOutcome;cancelled:boolean;error?:string;modelCalls:number;legacyModelCalls:number|null;trace:unknown[];outputs:unknown[];checkpoints:{hash:string;revision:number}[];privateSpans:string[];operatorPlanRequired:boolean;unappliedFollowups:number}
+export interface ModelFailure {stage:EditorialStage;turn:number;attempt:number;kind:'fixture'|'service'|'cancelled';code:string}
+export interface CaseResult {modelFailures?:ModelFailure[];execution?:ExecutionLedger;restoration?:{phase:string;sessionHash:string;selectedOutput?:string};id:string;runId:string;trial:number;outcome?:EditorialOutcome;cancelled:boolean;error?:string;modelCalls:number;legacyModelCalls:number|null;trace:unknown[];outputs:unknown[];checkpoints:{hash:string;revision:number}[];privateSpans:string[];operatorPlanRequired:boolean;unappliedFollowups:number}
 export interface RunCaseOptions {mode:'mock'|'real';model:EditorialModelPort;runId:string;trial:number;signal?:AbortSignal;budget?:Partial<RunBudget>;recipe?:Recipe;approvedProtocol?:ApprovedCaseProtocol}
-export function unexecutedCase(c:EvalCase,o:Pick<RunCaseOptions,'runId'|'trial'|'recipe'|'approvedProtocol'>):CaseResult{const plan=executionPlan(c,o.recipe,o.approvedProtocol);return {id:c.id,runId:o.runId,trial:o.trial,cancelled:true,error:'run_interrupted',modelCalls:0,legacyModelCalls:null,trace:[],outputs:[],checkpoints:[],privateSpans:[],operatorPlanRequired:plan.requiredSteps.some(s=>s.startsWith('operator:')),unappliedFollowups:c.input.followups.length,execution:{kind:plan.kind,trialStatus:'not_run',initial:plan.initialMessage===null?'not_applicable':'planned',terminalObserved:false,restorationObserved:false,requiredSteps:plan.requiredSteps,completedSteps:[],actions:plan.actions.map((a,index)=>({index,type:a.type,status:'skipped'}))}};}
+export function unexecutedCase(c:EvalCase,o:Pick<RunCaseOptions,'runId'|'trial'|'recipe'|'approvedProtocol'>):CaseResult{const plan=executionPlan(c,o.recipe,o.approvedProtocol);return {id:c.id,runId:o.runId,trial:o.trial,modelFailures:[],cancelled:true,error:'run_interrupted',modelCalls:0,legacyModelCalls:null,trace:[],outputs:[],checkpoints:[],privateSpans:[],operatorPlanRequired:plan.requiredSteps.some(s=>s.startsWith('operator:')),unappliedFollowups:c.input.followups.length,execution:{kind:plan.kind,trialStatus:'not_run',initial:plan.initialMessage===null?'not_applicable':'planned',terminalObserved:false,restorationObserved:false,requiredSteps:plan.requiredSteps,completedSteps:[],actions:plan.actions.map((a,index)=>({index,type:a.type,status:'skipped'}))}};}
 export async function runCase(c:EvalCase,o:RunCaseOptions):Promise<CaseResult>{
  const plan=executionPlan(c,o.recipe,o.approvedProtocol);validateAssertions(c,o.recipe);
  const execution:ExecutionLedger={kind:plan.kind,trialStatus:'running',initial:plan.initialMessage===null?'not_applicable':'planned',terminalObserved:false,restorationObserved:false,requiredSteps:plan.requiredSteps,completedSteps:[],actions:plan.actions.map((a,index)=>({index,type:a.type,status:'planned'}))};
- const r:CaseResult={id:c.id,runId:o.runId,trial:o.trial,cancelled:false,modelCalls:0,legacyModelCalls:null,trace:[],outputs:[],checkpoints:[],privateSpans:[],operatorPlanRequired:plan.unresolvedOperators>0,unappliedFollowups:c.input.followups.length,execution};
+ const r:CaseResult={id:c.id,runId:o.runId,trial:o.trial,modelFailures:[],cancelled:false,modelCalls:0,legacyModelCalls:null,trace:[],outputs:[],checkpoints:[],privateSpans:[],operatorPlanRequired:plan.unresolvedOperators>0,unappliedFollowups:c.input.followups.length,execution};
  let session=plan.initialSession?EditorialSessionSchema.parse(plan.initialSession):createEditorialSession('eval-'+hashText(o.runId+':'+o.trial).slice(0,24));
  if(plan.kind==='restoration'&&plan.initialSession){execution.restorationObserved=true;r.restoration={phase:session.phase,sessionHash:hashText(stableJson(session)),selectedOutput:session.selectedOutput};}
  const sources=sourcePortForCase(c),abort=new AbortController(),cancel=()=>abort.abort();o.signal?.addEventListener('abort',cancel,{once:true});if(o.signal?.aborted)abort.abort();
  const protect=(s:EditorialSession)=>{r.privateSpans.push(...s.claims.filter(x=>x.visibility!=='public').flatMap(x=>[x.value,...x.statusBasis.map(ref=>ref.quote)]),...(s.editorialNotes??[]).map(n=>n.text),...(s.candidate?.editorialNotes??[]).map(n=>n.text));};protect(session);
  const checkpoint=(s:EditorialSession)=>{session=s;r.checkpoints.push({hash:hashText(stableJson(s)),revision:s.revision});protect(s);};
  const complete=(index:number)=>{execution.actions[index].status='completed';const step=plan.stepFor(plan.actions[index]);if(step&&!execution.completedSteps.includes(step))execution.completedSteps.push(step);};
+ let turn=0;
  const cancelIndex=plan.actions.findIndex(a=>a.type==='cancel');const cancelAction=plan.actions[cancelIndex];
  const model:EditorialModelPort=async(req,signal)=>{
   r.modelCalls++;r.trace.push({type:'model_request',stage:req.stage,input:req.data});
   if(cancelAction?.type==='cancel'&&r.modelCalls>=cancelAction.afterCalls){complete(cancelIndex);abort.abort();throw new DOMException('cancelled','AbortError');}
-  const raw=await o.model(req,signal);r.privateSpans.push(...rawNoteSpans(raw,req.stage));r.trace.push({type:'model_response',stage:req.stage,raw,hash:hashText(raw)});return raw;
+  try{const raw=await o.model(req,signal);r.privateSpans.push(...rawNoteSpans(raw,req.stage));r.trace.push({type:'model_response',stage:req.stage,raw,hash:hashText(raw)});return raw;}
+  catch(error){
+   const message=error instanceof Error?error.message:'';const fixture=message.startsWith('fixture_error:');const cancelled=!fixture&&(signal.aborted||error instanceof Error&&error.name==='AbortError');
+   const code=fixture?'fixture_error:'+req.stage:cancelled?'cancelled':/^HTTP_[1-5][0-9]{2}$/.test(message)||['network_error','invalid_model_response'].includes(message)?message:'model_port_failed';
+   const failure:ModelFailure={stage:req.stage,turn,attempt:r.modelCalls,kind:fixture?'fixture':cancelled?'cancelled':'service',code};r.modelFailures!.push(failure);r.trace.push({type:'model_failure',...failure});
+   if(!cancelled)r.error??=code;
+   if(cancelled)throw new DOMException('cancelled','AbortError');throw Error(code);
+  }
  };
  const message=async(text:string)=>{
-  if(abort.signal.aborted)throw new DOMException('cancelled','AbortError');session=invalidateEditorialStamps(session);const id='editor-'+session.evidence.length;
+  turn++;if(abort.signal.aborted)throw new DOMException('cancelled','AbortError');session=invalidateEditorialStamps(session);const id='editor-'+session.evidence.length;
   session.evidence.push({id,revision:1,text,contentHash:hashText(text),kind:'editor_message',provenance:{messageId:id},context:{scenario:'unknown'}});session.evidenceRevision++;session.revision++;
   r.outcome=await runEditorialAgent({session,model,signal:abort.signal,sources,budget:o.budget,runId:'turn-'+hashText(o.runId+':'+session.revision).slice(0,24),onCheckpoint:checkpoint,onToolResult:result=>r.trace.push({type:'tool',result})});session=r.outcome.session;execution.terminalObserved=true;
  };
@@ -89,9 +98,10 @@ export async function runCase(c:EvalCase,o:RunCaseOptions):Promise<CaseResult>{
    }catch(e){execution.actions[index].status='failed';throw e;}
   }
   if(r.outcome)r.outcome={...r.outcome,session};execution.trialStatus=abort.signal.aborted?'cancelled':'completed';
- }catch(e){if(execution.initial==='planned')execution.initial='failed';execution.trialStatus=abort.signal.aborted?'cancelled':'failed';if(e&&typeof e==='object'&&'name'in e&&e.name==='AbortError')r.cancelled=true;else r.error=e instanceof Error&&e.message.startsWith('fixture_error:')?e.message:'runner_action_failed';}
+ }catch(e){if(execution.initial==='planned')execution.initial='failed';execution.trialStatus=abort.signal.aborted?'cancelled':'failed';if(e&&typeof e==='object'&&'name'in e&&e.name==='AbortError')r.cancelled=true;else r.error??=e instanceof Error&&e.message.startsWith('fixture_error:')?e.message:'runner_action_failed';}
  finally{o.signal?.removeEventListener('abort',cancel);r.cancelled=r.cancelled||abort.signal.aborted;for(const a of execution.actions)if(a.status==='planned')a.status='skipped';}
  r.operatorPlanRequired=execution.requiredSteps.some(s=>s.startsWith('operator:')&&!execution.completedSteps.includes(s));r.unappliedFollowups=execution.requiredSteps.filter(s=>s.startsWith('followup:')&&!execution.completedSteps.includes(s)).length;
+ if(r.modelFailures!.some(f=>f.kind!=='cancelled'))execution.trialStatus='failed';
  protect(session);r.privateSpans=[...new Set(r.privateSpans)];return r;
 }
 export function originalStageResponses(c:EvalCase):Record<string,ReplayReply[]> {

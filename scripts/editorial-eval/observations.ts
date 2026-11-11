@@ -2,7 +2,7 @@ import {stableJson} from '../../src/lib/editorialTypes';
 import type {EvalCase,Recipe,CaseResult} from './replay';
 export interface Assertion {checkId:string;path:string;op:'equals'|'includes'|'not_includes'|'nonempty';value?:unknown}
 export interface ExecutionLedger {kind:'agent'|'historical'|'restoration';trialStatus:'running'|'completed'|'failed'|'cancelled'|'not_run';initial:'planned'|'completed'|'not_applicable'|'failed';terminalObserved:boolean;restorationObserved:boolean;requiredSteps:string[];completedSteps:string[];actions:{index:number;type:string;status:'planned'|'completed'|'failed'|'skipped'}[]}
-const roots=new Set(['outcome','outputs','cancelled','modelCalls','legacyModelCalls','error','checkpoints','trace','execution','restoration','unappliedFollowups','operatorPlanRequired']);
+const roots=new Set(['modelFailures','outcome','outputs','cancelled','modelCalls','legacyModelCalls','error','checkpoints','trace','execution','restoration','unappliedFollowups','operatorPlanRequired']);
 export function validateAssertion(a:Assertion){
  if(!a||typeof a.checkId!=='string'||!a.checkId||typeof a.path!=='string'||!['equals','includes','not_includes','nonempty'].includes(a.op))throw Error('assertion_schema');
  const parts=a.path.split('.');if(!roots.has(parts[0])||parts.some(p=>!/^[A-Za-z0-9_]+$/.test(p)||['__proto__','prototype','constructor'].includes(p)))throw Error('assertion_path');
