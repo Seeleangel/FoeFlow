@@ -120,3 +120,19 @@ export function narrowsEditorialAudience(draft: string, audience: string, organi
     label => containsEditorialText(draft, label + organizer + audience),
   );
 }
+
+
+/** V2 compatibility is deliberately separate from the v1 loop until WP06 integration. */
+export function legacyBriefCandidates(brief: EditorialBrief, session: import('./editorialTypes').EditorialSession): { scopes: import('./editorialTypes').Scope[]; claims: import('./editorialTypes').FactClaim[]; diagnostics: import('./editorialTypes').Diagnostics[] } {
+  const scopes: import('./editorialTypes').Scope[] = [], claims: import('./editorialTypes').FactClaim[] = [], diagnostics: import('./editorialTypes').Diagnostics[] = [];
+  for (const fact of brief.facts) {
+    const source = session.evidence.find(e => e.id === fact.source), start = source?.text.indexOf(fact.quote) ?? -1;
+    if (!source || start < 0 || !fact.quote.includes(fact.value)) { diagnostics.push({ code: 'invalid_reference', message: 'Legacy candidate needs exact source offsets.', refs: [] }); continue; }
+    const refs = [{ evidenceId: source.id, revision: source.revision, start, end: start + fact.quote.length, quote: fact.quote }];
+    const id = `legacy-${source.id}-${start}-${fact.field}-${encodeURIComponent(fact.value)}`;
+    scopes.push({ id, kind: 'other', label: FIELD_LABELS[fact.field], qualifiers: [], anchors: refs, identity: 'provisional' });
+    claims.push({ id: id + '-claim', selector: { scopeId: id, predicate: fact.field }, value: fact.value, refs, epistemic: 'unknown', visibility: fact.status === 'private' ? 'private' : 'public', statusBasis: fact.status === 'private' ? refs : [] });
+  }
+  if (brief.facts.length || brief.needed.length) diagnostics.push({ code: 'legacy_scope_unresolved', message: 'Legacy fields are unaligned candidates, not authority for satisfying requirements or permissions.', refs: [] });
+  return { scopes, claims, diagnostics };
+}
