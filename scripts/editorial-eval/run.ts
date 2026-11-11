@@ -5,7 +5,7 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {resolve,dirname,join,basename} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {EDITORIAL_STAGE_PROMPTS} from '../../src/lib/editorialPrompts';
-import {prepareAgentContext} from '../../src/lib/agentRuntime';
+import {abortable,prepareAgentContext} from '../../src/lib/agentRuntime';
 import type {EditorialModelPort} from '../../src/lib/editorialController';
 import {DEFAULT_RUN_BUDGET} from '../../src/lib/editorialTypes';
 import {StageReplay,parseCaseFile,parseRecipes,replayQueues,runCase,unexecutedCase,type Recipe} from './replay';
@@ -14,16 +14,22 @@ import {verifyHash,makeManifest,configSummary,type ModelConfig} from './manifest
 export function realModel(config:ModelConfig,record:(meta:unknown)=>void,transport:typeof fetch=fetch):EditorialModelPort {
  return async({stage,data},signal)=>{
   const parameters={model:config.model,temperature:config.temperature,max_tokens:stage==='write'?8192:stage==='decide'?1500:config.maxTokens};
-  const sentAt=new Date().toISOString();const localRequestId=randomUUID();let response:Response;
-  try {response=await transport(config.apiUrl,{method:'POST',redirect:'error',headers:{'Content-Type':'application/json',Authorization:'Bearer '+config.key},body:JSON.stringify({...parameters,messages:prepareAgentContext([{role:'system',content:EDITORIAL_STAGE_PROMPTS[stage]},{role:'user',content:JSON.stringify(data)}])}),signal});}
-  catch {record({localRequestId,stage,parameters,sentAt,status:signal.aborted?'cancelled':'network_error'});throw Error(signal.aborted?'cancelled':'network_error');}
-  const requestId=response.headers.get('x-request-id')??response.headers.get('request-id');
-  let body:{id?:string;choices?:{message?:{content?:string}}[];usage?:unknown};
-  if(!response.ok){record({localRequestId,requestId,stage,parameters,sentAt,status:response.status});throw Error('HTTP_'+response.status);}
-  try{body=await response.json()}catch{record({localRequestId,requestId,stage,parameters,sentAt,status:'invalid_response'});throw Error('invalid_model_response')}
-  record({localRequestId,requestId:requestId??body.id??null,responseId:body.id??null,stage,parameters,sentAt,status:response.status,usage:safeUsage(body.usage)});
-  const content=body.choices?.[0]?.message?.content;if(typeof content!=='string')throw Error('invalid_model_response');return content;
+  const sentAt=new Date().toISOString(),localRequestId=randomUUID();let requestId:string|null=null,recorded=false;
+  const once=(meta:Record<string,unknown>)=>{if(recorded)return;recorded=true;record(structuredClone({localRequestId,requestId,stage,parameters,sentAt,...meta}));};
+  const aborted=()=>new DOMException('cancelled','AbortError');const onAbort=()=>once({status:'aborted'});signal.addEventListener('abort',onAbort,{once:true});
+  try{
+   if(signal.aborted){onAbort();throw aborted();}let response:Response;
+   try{response=await abortable(transport(config.apiUrl,{method:'POST',redirect:'error',headers:{'Content-Type':'application/json',Authorization:'Bearer '+config.key},body:JSON.stringify({...parameters,messages:prepareAgentContext([{role:'system',content:EDITORIAL_STAGE_PROMPTS[stage]},{role:'user',content:JSON.stringify(data)}])}),signal}),signal);}
+   catch{if(signal.aborted)throw aborted();once({status:'network_error'});throw Error('network_error');}
+   requestId=response.headers.get('x-request-id')??response.headers.get('request-id');
+   if(!response.ok){once({status:response.status});throw Error('HTTP_'+response.status);}
+   let body:{id?:string;choices?:{message?:{content?:string}}[];usage?:unknown};
+   try{body=await abortable(response.json(),signal);}catch{if(signal.aborted)throw aborted();once({status:'invalid_response'});throw Error('invalid_model_response');}
+   if(signal.aborted)throw aborted();once({requestId:requestId??body.id??null,responseId:body.id??null,status:response.status,usage:safeUsage(body.usage)});
+   const content=body.choices?.[0]?.message?.content;if(typeof content!=='string')throw Error('invalid_model_response');return content;
+  }finally{signal.removeEventListener('abort',onAbort);}
  };
+
 }
 export function parseArgs(args:string[]){
  const flags=new Set(['dry-run','mock','real','allow-acceptance']);const values=new Set(['cases','sha256','select','out','trials','recipe','protocol','protocol-sha256','api-url','model','temperature','max-tokens']);const out:Record<string,string|boolean>={};
