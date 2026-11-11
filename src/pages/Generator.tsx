@@ -3,6 +3,14 @@ import { safeArticleHtml } from '@/lib/safeArticleHtml';
 import { downloadBlob } from '@/lib/browserImage';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAgentRun } from '@/hooks/useAgentRun';
+import { useEditorialSession } from '@/hooks/useEditorialSession';
+import { assertConfirmable, applyControlEvent } from '@/lib/editorialState';
+import { currentInputKey, hashText, type EditorialSession } from '@/lib/editorialTypes';
+import { editorialPreviewFields, requireConfirmedOutput, exportPublicDocumentToDocx } from '@/lib/editorialOutput';
+import { formatQuestion } from '@/lib/editorialGaps';
+import { applyEditorTaskPatch } from '@/lib/editorialTask';
+import { canHandoff } from '@/lib/editorialController';
+import { editorialStopExplanation } from '@/lib/editorialStatus';
 import { runEditorialAgent, type EditorialHandoff } from '@/lib/editorialAgent';
 import { Button } from '@/components/ui/button';
 import { isAbortError, throwIfAborted } from '@/lib/agentRuntime';
@@ -16,13 +24,14 @@ import { buildHtmlArticle } from '@/lib/htmlBuilder';
 import { exportToDocx } from '@/lib/wordExport';
 import { getDefaultTheme } from '@/lib/themeLoader';
 import { analyzeArticleStyles } from '@/lib/articleStyleAnalyzer';
-import { saveDraft } from '@/lib/draftStorage';
+import { saveDraft, saveConfirmedEditorialDraft } from '@/lib/draftStorage';
 import { AUTO_SAVE_DEBOUNCE_MS } from '@/lib/constants';
 import { showToast } from '@/components/ui/toaster';
 import ChatPanel from '@/components/generator/ChatPanel';
 import PreviewPanel from '@/components/generator/PreviewPanel';
 import {
   saveGeneratorSession,
+  compareAndSaveEditorialSession,
   loadGeneratorSession,
   deleteGeneratorSession,
   getAllGeneratorSessions,
@@ -130,6 +139,9 @@ export default function Generator() {
   });
   const [sessions, setSessions] = useState<Array<{ id: string; title: string; updatedAt: number }>>([]);
   const [session, setSession] = useState<string>(`generator_${Date.now()}`);
+  const editorialState = useEditorialSession(session);
+  const editorialSession = editorialState.session;
+  const loadSessionOnMount=useRef<((id:string)=>Promise<void>)|undefined>(undefined);
   const [showHistory, setShowHistory] = useState(false);
   const sessionRef = useRef(session);
   sessionRef.current = session;
@@ -161,6 +173,8 @@ export default function Generator() {
         if (t.length > 0) {
           setSelectedId(t[0].id);
         }
+        if (allSessions.length) await loadSessionOnMount.current?.(allSessions[0].id);
+        if (allSessions.length) await loadSessionOnMount.current?.(allSessions[0].id);
 
         if (!isWebApp) await analyzeArticleStyles();
       } catch (err) {
@@ -186,18 +200,21 @@ export default function Generator() {
     }
   }, [layoutDirections, selectedDirection, generatedText, handleLayoutDirectionSelect]);
 
-  const snapshot = useMemo<GeneratorSessionState>(() => ({
+  const agentView=editorialSession ? editorialPreviewFields(editorialSession) : undefined;
+  const snapshot = useMemo<GeneratorSessionState>(() => {
+    const agentView=editorialSession ? editorialPreviewFields(editorialSession) : undefined;
+    return ({
     messages: chatMessages.map((message) => ({ ...message, timestamp: message.timestamp.toISOString() })),
-    chatInput, generatedText, generatedHtml, generatedTitle, layoutHtml,
+    chatInput, generatedText:agentView?.contentText ?? generatedText, generatedHtml:agentView?.contentHtml ?? generatedHtml, generatedTitle:agentView?.title ?? generatedTitle, layoutHtml:agentView?.contentHtml ?? layoutHtml,
     layoutStrategyJson: layoutStrategy ? JSON.stringify(layoutStrategy) : '',
     styleSpecJson: styleSpec ? JSON.stringify(styleSpec) : '',
     selectedDirectionJson: selectedDirection ? JSON.stringify(selectedDirection) : '',
     selectedTemplateId: selectedId,
-    editorial,
-  }), [chatMessages, chatInput, generatedText, generatedHtml, generatedTitle, layoutHtml, layoutStrategy, styleSpec, selectedDirection, selectedId, editorial]);
+    editorial, editorialSession, creationMode,
+  }); }, [chatMessages, chatInput, generatedText, generatedHtml, generatedTitle, layoutHtml, layoutStrategy, styleSpec, selectedDirection, selectedId, editorial, editorialSession, creationMode]);
 
   const flushSave = async () => {
-    if (snapshot.messages.length || snapshot.generatedText) await saveGeneratorSession(sessionRef.current, snapshot).catch(console.error);
+    if (snapshot.messages.length || snapshot.generatedText || snapshot.editorialSession) await saveGeneratorSession(sessionRef.current, snapshot).catch(console.error);
   };
 
   const stopAllTasks = () => {
@@ -221,6 +238,7 @@ export default function Generator() {
       setGeneratedHtml('');
       setGeneratedTitle('');
       setEditorial(undefined);
+      editorialState.restore(undefined);
       setLayoutHtml('');
       setLayoutStrategy(null);
       reset();
@@ -255,6 +273,8 @@ export default function Generator() {
         setGeneratedHtml(loaded.state.generatedHtml);
         setGeneratedTitle(loaded.state.generatedTitle);
         setEditorial(loaded.state.editorial);
+        editorialState.restore(loaded.state.editorialSession);
+        setCreationMode(loaded.state.creationMode ?? 'agent');
         setLayoutHtml(loaded.state.layoutHtml);
         if (loaded.state.layoutStrategyJson) {
           try {
@@ -279,6 +299,8 @@ export default function Generator() {
       sessionChanging.current = false;
     }
   };
+
+  loadSessionOnMount.current=handleLoadSession;
 
   const handleDeleteSession = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -405,24 +427,25 @@ export default function Generator() {
 
       if (creationMode === 'agent') {
         try {
+          const messageId = 'message-' + (retrying ? latestMessage.timestamp : newUserMessage.timestamp).getTime() + '-' + newMessages.length;
+          editorialState.appendMessage(text, messageId);
+          const owner = editorialState.begin();
+          const targetSession = sessionRef.current;
+          const isCurrent = () => chatRun.isCurrent() && owner.isCurrent() && sessionRef.current === targetSession;
           const result = await runEditorialAgent({
-            messages: newMessages.map(({ role, content }) => ({ role, content })),
-            previousDraft: generatedText,
+            session: owner.session, runId: owner.runId,
             template: { name: selectedTemplate.name, structureJson: selectedTemplate.structureJson },
-            signal: chatRun.signal,
-            onStep: label => { if (chatRun.isCurrent()) setEditorialProgress(label); },
+            signal: chatRun.signal, isCurrent,
+            onCheckpoint: next => { if (isCurrent()) owner.checkpoint(next); },
+            onStep: label => { if (isCurrent()) setEditorialProgress(label); },
           });
-          if (!chatRun.isCurrent()) return;
+          if (!isCurrent()) return;
+          owner.checkpoint(result.session);
           if (result.type === 'draft') {
-            setGeneratedText(result.text);
-            setGeneratedTitle(result.title);
-            setGeneratedHtml(result.html);
-            setLayoutHtml(result.html);
-            setLayoutStrategy(null);
-            setEditorial(result.handoff);
-            reset();
+            setLayoutStrategy(null); reset();
+            setEditorial({status:'pending',notes:[],sources:[]});
           }
-          const content = result.type === 'question' ? result.text : '稿件已完成审稿和排版，请在预览中核对后确认成稿。';
+          const content = result.type === 'question' ? formatQuestion(result.question) : editorialStopExplanation(result.session);
           setChatMessages([...newMessages, { role: 'assistant', content, timestamp: new Date() }]);
         } catch (err) {
           if (!chatRun.isCurrent() || isAbortError(err)) return;
@@ -502,7 +525,7 @@ export default function Generator() {
   };
 
   useEffect(() => {
-    if (!snapshot.messages.length && !snapshot.generatedText) return;
+    if (!snapshot.messages.length && !snapshot.generatedText && !snapshot.editorialSession) return;
     const timer = setTimeout(() => {
       if (confirmationInFlight.current) return;
       saveGeneratorSession(session, snapshot)
@@ -665,30 +688,46 @@ export default function Generator() {
   };
 
   const confirmFinal = async () => {
-    if (editorial?.status !== 'pending' || loading || sessionChanging.current || confirmationInFlight.current) return;
-    confirmationInFlight.current = true;
-    setConfirming(true);
-    const confirmed: EditorialHandoff = { ...editorial, status: 'confirmed' };
-    const next = { ...snapshot, editorial: confirmed };
+    if (!editorialSession || editorialSession.phase !== 'pending_confirmation' || loading || sessionChanging.current || confirmationInFlight.current) return;
+    confirmationInFlight.current = true; setConfirming(true);
+    const target = session;
     try {
-      await saveGeneratorSession(session, next);
-      flushRef.current = next;
-      setEditorial(confirmed);
-      showToast('已确认成稿', 'success');
-    } catch {
-      showToast('成稿确认未保存，请重试。', 'error');
-    } finally {
-      confirmationInFlight.current = false;
-      setConfirming(false);
-    }
+      // Flush the pending checkpoint first; CAS then binds the exact persisted revision.
+      await saveGeneratorSession(target,snapshot);
+      const applied=await editorialState.confirm(async(next,expected)=>compareAndSaveEditorialSession(target,snapshot,next,expected));
+      if (applied) { flushRef.current={...snapshot,editorialSession:editorialState.getCurrent()}; setEditorial({status:'confirmed',notes:[],sources:[]}); showToast('已确认成稿','success'); }
+    } catch { showToast('成稿确认未保存或版本已变化，请重试。','error'); }
+    finally { confirmationInFlight.current=false; setConfirming(false); }
   };
+  let outputLocked=creationMode==='agent' || !!editorial || !!editorialSession;
+  if (editorialSession) { try { requireConfirmedOutput(editorialSession); outputLocked=false; } catch { /* locked */ } }
+  outputLocked=outputLocked || loading || confirming;
+  let canConfirm=false;
+  if (editorialSession?.phase==='pending_confirmation' && !loading && !confirming) { try { assertConfirmable(editorialSession); canConfirm=true; } catch { /* specific blockers in sidebar */ } }
+  // Legacy fields are only a read-only view of the chosen public version for agent sessions.
+  const previewHtml=agentView?.contentHtml ?? generatedHtml, previewLayout=agentView?.contentHtml ?? layoutHtml, previewText=agentView?.contentText ?? generatedText, previewTitle=agentView?.title ?? generatedTitle;
 
-  const outputLocked = editorial !== undefined && (editorial.status === 'pending' || loading || confirming);
+  const editorChange = (change:(s:EditorialSession)=>EditorialSession) => {
+    const current=editorialState.getCurrent(); if (!current || loading || confirming) return;
+    editorialState.restore(change(structuredClone(current)));
+  };
+  const waiveSource = (id:string) => editorChange(s=>{
+    const text='编辑明确豁免指定来源：'+(s.task.requiredSources.find(x=>x.id===id)?.selector.title??id);
+    const eid='editor-choice-'+crypto.randomUUID();s.evidence.push({id:eid,revision:1,text,contentHash:hashText(text),kind:'editor_message',provenance:{messageId:eid},context:{scenario:'unknown'}});
+    const refs=[{evidenceId:eid,revision:1,start:0,end:text.length,quote:text}];
+    return applyEditorTaskPatch(s,{baseRevision:s.task.revision,refs,sourceWaivers:[{sourceRequirementId:id,actor:'editor',refs,reason:text}]});
+  });
+  const verifyCriterion = (id:string) => editorChange(s=>{
+    if (!s.activeRunId) s.activeRunId='editor-'+crypto.randomUUID();
+    const next=applyControlEvent(s,{type:'human_verified',sessionId:s.sessionId,runId:s.activeRunId,expectedRevision:s.revision,verification:{criterionId:id,inputKey:currentInputKey(s),status:'pass',actor:'editor',verifiedAt:new Date().toISOString()}});
+    next.gate=canHandoff(next); if (!next.gate.blockers.length) next.phase='pending_confirmation';return next;
+  });
 
   const handleCopyHtml = () => {
     if (outputLocked) return;
+    const html=editorialState.getCurrent() ? requireConfirmedOutput(editorialState.getCurrent()!).layout.html : safeArticleHtml(layoutHtml || generatedHtml);
     navigator.clipboard
-      .writeText(safeArticleHtml(layoutHtml || generatedHtml))
+      .writeText(html)
       .then(() => showToast('HTML 已复制到剪贴板', 'success'))
       .catch(() => showToast('无法访问剪贴板，请检查浏览器权限', 'error'));
   };
@@ -697,7 +736,8 @@ export default function Generator() {
     if (outputLocked) return;
     const title = generatedTitle || selectedTemplate?.name || '未命名文章';
     try {
-      await saveDraft({
+      if (editorialState.getCurrent()) await saveConfirmedEditorialDraft(editorialState.getCurrent()!,selectedTemplate?.id || '');
+      else await saveDraft({
         id: crypto.randomUUID(),
         templateId: selectedTemplate?.id || '',
         mode: 'generator-draft',
@@ -716,8 +756,10 @@ export default function Generator() {
     if (outputLocked) return;
     const paragraphs = generatedText.split('\n').filter((p) => p.trim() && !p.startsWith('# '));
     const title = generatedTitle || selectedTemplate?.name || '未命名文章';
-    const blob = await exportToDocx(title, paragraphs);
-    downloadBlob(blob, `${title}.docx`);
+    const current=editorialState.getCurrent();
+    const bundle=current ? requireConfirmedOutput(current) : undefined;
+    const blob = bundle ? await exportPublicDocumentToDocx(bundle.document) : await exportToDocx(title, paragraphs);
+    downloadBlob(blob, `${bundle?.document.title ?? title}.docx`);
   };
 
   return (
@@ -733,7 +775,7 @@ export default function Generator() {
                 onClick={() => setCreationMode('agent')}>Agent 创作</Button>
               <Button variant={creationMode === 'manual' ? 'secondary' : 'ghost'} aria-pressed={creationMode === 'manual'}
                 disabled={loading || specLoading || layoutStage === 'generating' || confirming}
-                onClick={() => setCreationMode('manual')}>手动共创</Button>
+                onClick={async () => { if (editorialSession) await handleNewSession(); setCreationMode('manual'); }}>手动共创</Button>
             </div>
             <p className="mt-2 text-sm text-stone-600">{creationMode === 'agent'
               ? '按需查工作台素材，写作、审稿和排版后由你确认。检索到的相关片段会发给当前模型。'
@@ -783,7 +825,12 @@ export default function Generator() {
             </div>
             <PreviewPanel
               editorial={editorial}
-              canConfirm={!loading && !confirming}
+              editorialSession={editorialSession}
+              onWaiveSource={waiveSource}
+              onVerify={verifyCriterion}
+              onSelectOutput={selectedOutput=>editorChange(s=>({...s,selectedOutput,revision:s.revision+1}))}
+              editorialBusy={loading || confirming}
+              canConfirm={canConfirm}
               outputLocked={outputLocked}
               onConfirmFinal={confirmFinal}
               articleStage={articleStage}
@@ -804,13 +851,13 @@ export default function Generator() {
               layoutError={layoutError}
               layoutStrategy={layoutStrategy}
               pipelineSnapshot={pipelineSnapshot}
-              layoutHtml={layoutHtml}
+              layoutHtml={previewLayout}
               onLayoutAnalyze={handlePreviewLayoutAnalyze}
               onLayoutDirectionSelect={handlePreviewLayoutDirectionSelect}
               onStyleSpecChange={setStyleSpec}
-              generatedHtml={generatedHtml}
-              generatedText={generatedText}
-              generatedTitle={generatedTitle}
+              generatedHtml={previewHtml}
+              generatedText={previewText}
+              generatedTitle={previewTitle}
               selectedTemplateName={selectedTemplate.name}
               selectedTemplateId={selectedTemplate.id}
               layoutFeedbackState={layoutFeedbackState}

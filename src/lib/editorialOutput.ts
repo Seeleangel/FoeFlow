@@ -35,3 +35,15 @@ export function requireConfirmedOutput(s: EditorialSession): OutputBundle {
   if (!projection.document || gate.blockers.length) throw new EditorialOutputError('output_gate_failed', projection.blockers);
   return { document: projection.document, layout: structuredClone(s.layout!) };
 }
+
+/** Read-only UI/compatibility fields; no blocked body is promoted through legacy columns. */
+export function editorialPreviewFields(s: EditorialSession) {
+ let contentText='',contentHtml='',title='';
+ if (s.selectedOutput==='committed'||s.selectedOutput==='legacy') {
+  try { const b=requireConfirmedOutput(s); return {...publicDraftFields(b),title:b.document.title}; } catch { /* locked */ }
+ } else {
+  const doc=makePublicDocument(s).document;
+  if (doc) {title=doc.title;contentText='# '+doc.title+'\n'+doc.bodyMarkdown;if(s.layout?.contentHash===doc.contentHash) contentHtml=s.layout.html;}
+ }
+ return {contentText,contentHtml,title};
+}

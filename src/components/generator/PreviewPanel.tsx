@@ -1,3 +1,5 @@
+import { EditorialStatusPanel } from './EditorialStatusPanel';
+import type { EditorialSession } from '@/lib/editorialTypes';
 import { isWebApp } from '@/lib/platform';
 import { safeArticleHtml } from '@/lib/safeArticleHtml';
 import type { EditorialHandoff } from '@/lib/editorialAgent';
@@ -73,6 +75,11 @@ interface PreviewPanelProps {
   selectedTemplateId: string;
 
   editorial?: EditorialHandoff;
+  editorialSession?: EditorialSession;
+  onWaiveSource?: (id:string)=>void;
+  onVerify?: (id:string)=>void;
+  onSelectOutput?: (output:'candidate'|'committed'|'legacy')=>void;
+  editorialBusy?: boolean;
   canConfirm: boolean;
   outputLocked: boolean;
   onConfirmFinal: () => void;
@@ -91,7 +98,7 @@ export default function PreviewPanel({
   layoutFeedbackState, onLayoutRefineRequest,
   onLayoutAnalyze, onLayoutDirectionSelect, onStyleSpecChange,
   generatedHtml, generatedText,
-  editorial, canConfirm, outputLocked, onConfirmFinal,
+  editorial, editorialSession, onWaiveSource, onVerify, onSelectOutput, editorialBusy, canConfirm, outputLocked, onConfirmFinal,
   onCopyHtml, onSaveDraft, onExportWord,
 }: PreviewPanelProps) {
   const [analyzingMsg, analyzeIdx] = useRotatingMessage(LAYOUT_ANALYZING_MESSAGES, layoutStage ?? 'idle');
@@ -99,6 +106,7 @@ export default function PreviewPanel({
 
   return (
     <div className="h-full overflow-y-auto">
+      {editorialSession && <EditorialStatusPanel session={editorialSession} onWaiveSource={onWaiveSource} onVerify={onVerify} onSelectOutput={onSelectOutput} disabled={editorialBusy} />}
       {/* Article Pipeline UI */}
       {articleStage && (
         <ArticlePipeline
@@ -123,7 +131,7 @@ export default function PreviewPanel({
               <FileText className="w-5 h-5 text-green-600 animate-pulse-slow" />
               <span className="text-lg">生成结果</span>
             </div>
-            {!editorial && <div className="flex items-center gap-3">
+            {!editorial && !editorialSession && <div className="flex items-center gap-3">
               <LayoutControls
                 onAnalyze={onLayoutAnalyze}
                 onRequestRefine={onLayoutRefineRequest}
@@ -137,7 +145,7 @@ export default function PreviewPanel({
             </div>}
           </div>
           <div className="space-y-6 p-4 sm:p-7">
-            {editorial && (
+            {editorial && !editorialSession && (
               <section aria-label="稿件确认" className="space-y-2 rounded-lg border border-stone-200 bg-stone-50 p-4 text-sm text-stone-700">
                 <p role="status" className="font-semibold text-stone-900">{editorial.status === 'confirmed' ? '已确认成稿' : '待你确认成稿'}</p>
                 {editorial.status === 'pending' && <p>核对正文、排版和事实后确认。如需改动，在对话中告诉 Agent。</p>}
@@ -374,13 +382,13 @@ export default function PreviewPanel({
               )}
             </div>
 
-            {editorial?.status === 'pending' && (
+            {(editorialSession?.phase === 'pending_confirmation' || !editorialSession && editorial?.status === 'pending') && (
               <Button onClick={onConfirmFinal} disabled={!canConfirm} className="h-11 bg-red-700 px-4 text-white hover:bg-red-800">
                 <CheckCircle2 className="size-4" aria-hidden="true" /> 确认成稿
               </Button>
             )}
             {/* Action buttons — only shown after layout is complete */}
-            {(layoutHtml || (isWebApp && generatedHtml)) && (
+            {(layoutHtml || ((isWebApp || editorialSession) && generatedHtml)) && (
               <div className="flex flex-wrap gap-3 pt-4 border-t border-stone-100">
                 <Button
                   variant="outline"
@@ -416,7 +424,7 @@ export default function PreviewPanel({
       )}
 
       {/* Empty state */}
-      {!articleStage && !generatedHtml && (
+      {!articleStage && !generatedHtml && !editorialSession && (
         <div className="bg-gradient-to-b from-stone-50/90 to-white rounded-2xl border border-stone-100 p-12 text-center transition-all duration-300">
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-green-100 to-green-50 flex items-center justify-center mx-auto mb-4 shadow-sm">
             <FileText className="w-8 h-8 text-green-600" />

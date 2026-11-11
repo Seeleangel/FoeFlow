@@ -52,7 +52,7 @@ export async function openBrowserDb(workspace: string) {
 
   return {
     execute(query: string, values?: unknown[]) {
-      return access(true, (db) => { db.run(query, values as SqlValue[] | undefined) })
+      return access(true, (db) => { db.run(query, values as SqlValue[] | undefined); return { rowsAffected: db.getRowsModified() } })
     },
     select<T>(query: string, values?: unknown[]) {
       return access<T>(false, (db) => {

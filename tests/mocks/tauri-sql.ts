@@ -22,10 +22,24 @@ class MockDatabase {
     return new MockDatabase()
   }
 
-  async execute(sql: string, values?: any[]): Promise<void> {
+  async execute(sql: string, values?: any[]): Promise<{rowsAffected:number}> {
     const sqlLower = sql.toLowerCase()
 
-    if (sqlLower.includes('insert or replace into style_templates')) {
+    if (sqlLower.includes('update generated_drafts') && sqlLower.includes('and params_json = ?')) {
+      const table = this.tables.get('generated_drafts')!;
+      const confirmation = !sqlLower.includes('template_id = ?');
+      const idIndex=confirmation ? 3 : 5;
+      const row=table.rows.find(r=>r.id===values[idIndex] && r.mode===values[idIndex+1] && r.params_json===values[idIndex+2]);
+      if (!row) return {rowsAffected:0};
+      if (confirmation) Object.assign(row,{params_json:values[0],content_html:values[1],content_text:values[2]});
+      else Object.assign(row,{template_id:values[0],params_json:values[1],content_html:values[2],content_text:values[3],created_at:values[4]});
+      return {rowsAffected:1};
+    } else if (sqlLower.includes('insert or ignore into generated_drafts')) {
+      const table=this.tables.get('generated_drafts')!;
+      if (table.rows.some(r=>r.id===values[0])) return {rowsAffected:0};
+      table.rows.push({id:values[0],template_id:values[1],mode:values[2],params_json:values[3],content_html:values[4],content_text:values[5],created_at:values[6]});
+      return {rowsAffected:1};
+    } else if (sqlLower.includes('insert or replace into style_templates')) {
       const table = this.tables.get('style_templates')!
       const existingIdx = table.rows.findIndex((r: any) => r.id === values[0])
       if (existingIdx >= 0) {
@@ -154,6 +168,7 @@ class MockDatabase {
     } else if (sqlLower.includes('create table')) {
       // Ignore table creation - tables are pre-created
     }
+      return {rowsAffected:1};
   }
 
   async select<T>(sql: string, values?: any[]): Promise<T> {

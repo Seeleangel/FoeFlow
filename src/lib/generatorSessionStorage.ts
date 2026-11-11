@@ -1,4 +1,6 @@
 import { getDb } from '@/hooks/useDb';
+import { EditorialSessionSchema, stableJson, type EditorialSession } from './editorialTypes';
+import { normalizeLegacySession } from './editorialCompatibility';
 import type { EditorialHandoff } from './editorialAgent';
 
 export interface GeneratorSessionState {
@@ -17,6 +19,8 @@ export interface GeneratorSessionState {
   selectedDirectionJson: string;
   selectedTemplateId: string;
   editorial?: EditorialHandoff;
+  editorialSession?: EditorialSession;
+  creationMode?: 'agent' | 'manual';
 }
 
 export interface GeneratorSession {
@@ -58,6 +62,15 @@ function rowToSession(row: GeneratorSessionRow): GeneratorSession {
     console.warn('[generatorSessionStorage] Failed to parse params_json:', e);
   }
 
+  let editorialSession: EditorialSession | undefined;
+  if (parsed.editorialSession !== undefined) {
+    editorialSession = normalizeLegacySession(parsed.editorialSession);
+    // Damaged v2 state is preserved for recovery, never implicitly unlocked.
+    editorialSession.sessionId = row.id;
+  } else if (parsed.editorial) {
+    editorialSession = normalizeLegacySession({id:row.id,state:{...parsed,generatedText:row.content_text,generatedHtml:row.content_html}});
+    if (editorialSession.legacy?.confirmed) editorialSession.selectedOutput='legacy';
+  }
   return {
     id: row.id,
     title: (parsed.generatedTitle as string) || '未命名生成',
@@ -73,6 +86,8 @@ function rowToSession(row: GeneratorSessionRow): GeneratorSession {
       selectedDirectionJson: (parsed.selectedDirectionJson as string) || '',
       selectedTemplateId: row.template_id || '',
       editorial: (parsed.editorial as EditorialHandoff | undefined),
+      editorialSession,
+      creationMode: parsed.creationMode === 'manual' ? 'manual' : 'agent',
     },
     createdAt: row.created_at,
     updatedAt: row.created_at,
@@ -80,7 +95,7 @@ function rowToSession(row: GeneratorSessionRow): GeneratorSession {
 }
 
 function isValidSession(session: GeneratorSession): boolean {
-  return session.state.messages.length > 0 || session.state.generatedText.length > 0;
+  return !!session.state.editorialSession || session.state.messages.length > 0 || session.state.generatedText.length > 0;
 }
 
 export async function saveGeneratorSession(
@@ -89,12 +104,31 @@ export async function saveGeneratorSession(
 ): Promise<void> {
   const db = await getDb();
   const row = stateToRow(sessionId, state);
-  await db.execute(
-    `INSERT OR REPLACE INTO generated_drafts
-     (id, template_id, mode, params_json, content_html, content_text, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [row.id, row.template_id, row.mode, row.params_json, row.content_html, row.content_text, row.created_at]
-  );
+  const rows = await db.select<GeneratorSessionRow[]>('SELECT * FROM generated_drafts WHERE id = ? AND mode = ?', [sessionId, 'generator-session']);
+  if (rows.length) {
+    const previous = JSON.parse(rows[0].params_json || '{}') as GeneratorSessionState;
+    const old = previous.editorialSession, next = state.editorialSession;
+    if (old && (!next || next.sessionId !== sessionId || next.revision < old.revision || next.revision === old.revision && stableJson(next) !== stableJson(old))) throw new Error('stale_persistence');
+    const result = await db.execute('UPDATE generated_drafts SET template_id = ?, params_json = ?, content_html = ?, content_text = ?, created_at = ? WHERE id = ? AND mode = ? AND params_json = ?', [row.template_id,row.params_json,row.content_html,row.content_text,row.created_at,sessionId,'generator-session',rows[0].params_json]);
+    assertWritten(result);
+  } else {
+    const result = await db.execute(`INSERT OR IGNORE INTO generated_drafts (id, template_id, mode, params_json, content_html, content_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, [row.id,row.template_id,row.mode,row.params_json,row.content_html,row.content_text,row.created_at]);
+    assertWritten(result);
+  }
+}
+function assertWritten(result: unknown) {
+ if (!result || typeof result !== 'object' || !('rowsAffected' in result) || result.rowsAffected !== 1) throw new Error('stale_persistence');
+}
+/** A single SQL CAS covers both native SQLite and the web IndexedDB transaction. No read/replace race. */
+export async function compareAndSaveEditorialSession(sessionId: string, state: GeneratorSessionState, next: EditorialSession, expectedRevision: number): Promise<void> {
+ EditorialSessionSchema.parse(next);
+ if (next.sessionId !== sessionId || next.revision !== expectedRevision + 1) throw new Error('stale_persistence');
+ const db=await getDb(); const rows=await db.select<GeneratorSessionRow[]>('SELECT * FROM generated_drafts WHERE id = ? AND mode = ?', [sessionId,'generator-session']);
+ const old=rows[0]; if (!old) throw new Error('stale_persistence');
+ const previous=JSON.parse(old.params_json || '{}') as GeneratorSessionState;
+ if (previous.editorialSession?.sessionId !== sessionId || previous.editorialSession.revision !== expectedRevision || stableJson(previous.editorialSession) !== stableJson(state.editorialSession)) throw new Error('stale_persistence');
+ const row=stateToRow(sessionId,{...state,editorialSession:next,editorial:{status:'confirmed',notes:state.editorial?.notes ?? [],sources:state.editorial?.sources ?? []}});
+ assertWritten(await db.execute('UPDATE generated_drafts SET params_json = ?, content_html = ?, content_text = ? WHERE id = ? AND mode = ? AND params_json = ?', [row.params_json,row.content_html,row.content_text,sessionId,'generator-session',old.params_json]));
 }
 
 export async function loadGeneratorSession(sessionId: string): Promise<GeneratorSession | null> {

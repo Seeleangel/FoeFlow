@@ -1,0 +1,28 @@
+import {render,screen,fireEvent,waitFor,cleanup} from '@testing-library/react';
+import {afterEach,beforeEach,expect,it,vi} from 'vitest';
+import JSZip from 'jszip';
+import Generator from '../Generator';
+import {uiReady} from '@/lib/__tests__/editorialUiFixture';
+import type {ComponentProps} from 'react';
+import type Preview from '@/components/generator/PreviewPanel';
+const mocks=vi.hoisted(()=>({save:vi.fn(),cas:vi.fn(),load:vi.fn(),all:vi.fn(),execute:vi.fn(),download:vi.fn(),write:vi.fn(),model:vi.fn()}));
+vi.mock('@/lib/platform',()=>({isWebApp:true}));
+vi.mock('@/hooks/useDb',()=>({getDb:async()=>({execute:mocks.execute})}));
+vi.mock('@/lib/browserImage',()=>({downloadBlob:mocks.download}));
+vi.mock('@/lib/generatorSessionStorage',()=>({saveGeneratorSession:mocks.save,compareAndSaveEditorialSession:mocks.cas,loadGeneratorSession:mocks.load,getAllGeneratorSessions:mocks.all,deleteGeneratorSession:vi.fn()}));
+vi.mock('@/lib/libraryStorage',()=>({getAllTemplates:async()=>[{id:'t',name:'Template',structureJson:{}}]}));
+vi.mock('@/lib/editorialAgent',()=>({runEditorialAgent:mocks.model}));
+vi.mock('@/hooks/useArticlePipeline',()=>({useArticlePipeline:()=>({articleStage:null,articleDirections:[],articlePipelineLoading:false,cancelArticlePipeline:vi.fn()})}));
+vi.mock('@/hooks/useLayoutPipeline',()=>({useLayoutPipeline:()=>({layoutStage:null,layoutDirections:[],styleSpec:null,selectedDirection:null,specLoading:false,reset:vi.fn(),cancelLayoutPipeline:vi.fn()})}));
+vi.mock('@/components/generator/ChatPanel',()=>({default:({onNewSession,inputValue,onInputChange,onSend}:{onNewSession:()=>void;inputValue:string;onInputChange:(s:string)=>void;onSend:()=>void})=><><button onClick={onNewSession}>new</button><input aria-label="chat" value={inputValue} onChange={e=>onInputChange(e.target.value)}/><button onClick={onSend}>send</button></>}));
+vi.mock('@/components/generator/PreviewPanel',()=>({default:(p:ComponentProps<typeof Preview>)=><><div data-testid="public" dangerouslySetInnerHTML={{__html:p.generatedHtml}}/><button disabled={!p.canConfirm} onClick={p.onConfirmFinal}>confirm</button><button disabled={p.outputLocked} onClick={p.onCopyHtml}>copy</button><button disabled={p.outputLocked} onClick={p.onSaveDraft}>save</button><button disabled={p.outputLocked} onClick={p.onExportWord}>word</button><button onClick={()=>p.onSelectOutput?.('committed')}>old</button></>}));
+afterEach(cleanup);
+beforeEach(()=>{vi.clearAllMocks();const s=uiReady();mocks.all.mockResolvedValue([{id:'s',title:'Public title',updatedAt:1}]);mocks.load.mockResolvedValue({id:'s',state:{messages:[],chatInput:'',generatedText:'',generatedHtml:'',generatedTitle:'',layoutHtml:'',layoutStrategyJson:'',styleSpecJson:'',selectedDirectionJson:'',selectedTemplateId:'t',editorialSession:s}});mocks.save.mockResolvedValue(undefined);mocks.cas.mockResolvedValue(undefined);Object.defineProperty(navigator,'clipboard',{value:{writeText:mocks.write.mockResolvedValue(undefined)},configurable:true})});
+it('real handlers stay locked on disk failure then all consume exactly the persisted public snapshot',async()=>{
+ render(<Generator/>);await waitFor(()=>expect(screen.getByRole('button',{name:'confirm'})).toBeEnabled());expect(screen.getByRole('button',{name:'copy'})).toBeDisabled();mocks.cas.mockRejectedValueOnce(Error('disk'));fireEvent.click(screen.getByRole('button',{name:'confirm'}));await waitFor(()=>expect(mocks.cas).toHaveBeenCalledTimes(1));expect(screen.getByRole('button',{name:'copy'})).toBeDisabled();await waitFor(()=>expect(screen.getByRole('button',{name:'confirm'})).toBeEnabled());fireEvent.click(screen.getByRole('button',{name:'confirm'}));await waitFor(()=>expect(screen.getByRole('button',{name:'copy'})).toBeEnabled());
+ fireEvent.click(screen.getByRole('button',{name:'copy'}));expect(mocks.write.mock.calls[0][0]).toContain('Public body.');expect(mocks.write.mock.calls[0][0]).not.toContain('INTERNAL-NOTE');fireEvent.click(screen.getByRole('button',{name:'save'}));await waitFor(()=>expect(mocks.execute).toHaveBeenCalled());expect(JSON.stringify(mocks.execute.mock.calls)).not.toContain('INTERNAL-NOTE');
+ fireEvent.click(screen.getByRole('button',{name:'word'}));await waitFor(()=>expect(mocks.download).toHaveBeenCalled());const blob=mocks.download.mock.calls[0][0] as Blob;const buffer=await new Promise<ArrayBuffer>(r=>{const reader=new FileReader();reader.onload=()=>r(reader.result as ArrayBuffer);reader.readAsArrayBuffer(blob)});const zip=await JSZip.loadAsync(buffer);const xml=await zip.file('word/document.xml')!.async('string');expect(xml).toContain('Public body.');expect(xml).not.toContain('INTERNAL-NOTE');expect(screen.getByTestId('public').innerHTML).toBe(mocks.write.mock.calls[0][0]);
+});
+it('a late outcome cannot overwrite a new session',async()=>{
+ mocks.all.mockResolvedValue([]);let resolve!:(v:unknown)=>void;mocks.model.mockImplementation(()=>new Promise(r=>{resolve=r}));render(<Generator/>);await waitFor(()=>expect(screen.getByRole('button',{name:'send'})).toBeEnabled());fireEvent.change(screen.getByLabelText('chat'),{target:{value:'Please write a public article'}});fireEvent.click(screen.getByRole('button',{name:'send'}));await waitFor(()=>expect(mocks.model).toHaveBeenCalled());const options=mocks.model.mock.calls[0][0];fireEvent.click(screen.getByRole('button',{name:'new'}));await waitFor(()=>expect(options.isCurrent()).toBe(false));resolve({type:'draft',session:{...uiReady(options.session.sessionId),activeRunId:options.runId,revision:100}});await waitFor(()=>expect(screen.getByTestId('public')).toBeEmptyDOMElement());expect(screen.getByRole('button',{name:'copy'})).toBeDisabled();expect(mocks.cas).not.toHaveBeenCalled();
+});

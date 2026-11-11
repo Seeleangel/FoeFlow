@@ -61,3 +61,10 @@ export async function deleteDraft(id: string): Promise<void> {
   const db = await getDb();
   await db.execute('DELETE FROM generated_drafts WHERE id = ?', [id]);
 }
+
+/** Agent workspace drafts contain no session, evidence, notes, gaps or permissions. */
+export async function saveConfirmedEditorialDraft(session: import('./editorialTypes').EditorialSession, templateId: string): Promise<void> {
+ const {requireConfirmedOutput,publicDraftFields}=await import('./editorialOutput');
+ const fields=publicDraftFields(requireConfirmedOutput(session));
+ await saveDraft({id:crypto.randomUUID(),templateId,mode:'generator-draft',...fields,createdAt:Date.now()});
+}
