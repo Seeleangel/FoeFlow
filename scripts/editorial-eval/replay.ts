@@ -119,3 +119,11 @@ async function wordEvidence(document:import('../../src/lib/editorialTypes').Publ
  const bytes=typeof blob.arrayBuffer==='function'?await blob.arrayBuffer():await new Promise<ArrayBuffer>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result as ArrayBuffer);reader.onerror=reject;reader.readAsArrayBuffer(blob)});
  const zip=await JSZip.loadAsync(bytes);const xml=await zip.file('word/document.xml')!.async('string');return {docxBytes:blob.size,contentHash:document.contentHash,documentXml:xml};
 }
+
+/** Supplements add absent stages only; original fault queues are immutable. */
+export function replayQueues(c:EvalCase,supplement:Record<string,ReplayReply[]>={}) {
+ const original=originalStageResponses(c);
+ if(Object.keys(supplement).some(stage=>Object.hasOwn(original,stage)))throw Error('fixture_stage_collision');
+ const effective={...original,...supplement};const hashes=(q:Record<string,ReplayReply[]>)=>Object.fromEntries(Object.entries(q).map(([stage,replies])=>[stage,hashText(stableJson(replies))]));
+ return {effective,originalHashes:hashes(original),effectiveHashes:hashes(effective)};
+}

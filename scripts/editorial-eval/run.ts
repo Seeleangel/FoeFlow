@@ -5,7 +5,7 @@ import {EDITORIAL_STAGE_PROMPTS} from '../../src/lib/editorialPrompts';
 import {prepareAgentContext} from '../../src/lib/agentRuntime';
 import type {EditorialModelPort} from '../../src/lib/editorialController';
 import {DEFAULT_RUN_BUDGET} from '../../src/lib/editorialTypes';
-import {StageReplay,parseCaseFile,parseRecipes,originalStageResponses,runCase,redact,type Recipe} from './replay';
+import {StageReplay,parseCaseFile,parseRecipes,replayQueues,runCase,redact,type Recipe} from './replay';
 import {caseMetrics,groupedMetrics} from './metrics';
 import {verifyHash,makeManifest,configSummary,type ModelConfig} from './manifest';
 export function realModel(config:ModelConfig,record:(meta:unknown)=>void,transport:typeof fetch=fetch):EditorialModelPort {
@@ -41,6 +41,7 @@ export async function main(args:string[],env:Record<string,string|undefined>=pro
  let recipes:Record<string,Recipe>={};let recipeHash:string|undefined;
  if(a.recipe){const recipePath=resolve(String(a.recipe));if(!a['allow-acceptance']&&/[/\\](blind[^/\\]*|sealed)[/\\]/i.test(recipePath))throw Error('acceptance_assets_require_explicit_mode');const raw=await readFile(recipePath);recipeHash=verifyHash(raw);recipes=parseRecipes(JSON.parse(raw.toString('utf8')));}
  if(a.real&&selected.some(c=>(c.input.initial_message===null||c.input.followups.length||c.input.operator_events.length)&&!recipes[c.id]?.actions))throw Error('operator_recipe_required');
+ for(const c of selected)replayQueues(c,recipes[c.id]?.responses);
  const runId='editorial-'+randomUUID();const root=process.cwd();const out=resolve(String(a.out??join('.git','editorial-eval',runId)));
  await mkdir(dirname(out),{recursive:true,mode:0o700});await mkdir(out,{mode:0o700});
  const save=async(name:string,data:unknown,secrets:string[]=[])=>writeFile(join(out,name),JSON.stringify(redact(data,secrets),null,2)+'\n',{mode:0o600,flag:'wx'});
@@ -51,11 +52,11 @@ export async function main(args:string[],env:Record<string,string|undefined>=pro
  const metrics=[];const allPrivateSpans:string[]=[];const abort=new AbortController();const stop=()=>abort.abort();process.once('SIGINT',stop);process.once('SIGTERM',stop);
  try{
   for(const c of selected)for(let trial=1;trial<=trials;trial++){
-   if(abort.signal.aborted)break;const recipe=recipes[c.id];const q=new StageReplay({...originalStageResponses(c),...recipe?.responses});const requests:unknown[]=[];
+   if(abort.signal.aborted)break;const recipe=recipes[c.id];const queues=replayQueues(c,recipe?.responses);const q=new StageReplay(queues.effective);const requests:unknown[]=[];
    const model=a.mock?q.call:realModel(config,meta=>requests.push(meta));
    const r=await runCase(c,{mode:a.mock?'mock':'real',model,runId,trial,recipe,signal:abort.signal});
    const m=caseMetrics(c,r,recipe);metrics.push(m);const secrets=[config.key??'',...r.privateSpans];allPrivateSpans.push(...r.privateSpans);
-   await save(c.id+'-'+trial+'.json',{...r,privateSpans:undefined,requests,remaining:a.mock?q.remaining():undefined,metrics:m},secrets);
+   await save(c.id+'-'+trial+'.json',{...r,privateSpans:undefined,requests,queueEvidence:{originalHashes:queues.originalHashes,effectiveHashes:queues.effectiveHashes,consumed:a.mock?q.consumed:null},remaining:a.mock?q.remaining():undefined,metrics:m},secrets);
   }
  }finally{process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);}
  const summary={runId,casesHash,...groupedMetrics(metrics),modelCallUpperBound};await save('summary.json',summary);

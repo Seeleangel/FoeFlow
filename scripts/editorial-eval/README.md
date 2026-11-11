@@ -68,3 +68,6 @@ Validation:
 npx vitest run scripts/editorial-eval/__tests__/runner.test.ts
 npx tsc -p scripts/editorial-eval/tsconfig.json
 ```
+
+## C-M2 queue-integrity update
+Supplementary `responses` may name only stages absent from the original frozen case. **Any overlap is rejected as `fixture_stage_collision` before any model request**, including identical responses or empty arrays. Remove overlapping recipe stages; never clean the original fault. Case artifacts record original/effective per-stage SHA-256 plus actual mock consumption and leftovers. No recipe action schema change in this update.
