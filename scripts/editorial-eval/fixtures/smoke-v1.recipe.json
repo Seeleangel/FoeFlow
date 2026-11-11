@@ -1,0 +1,68 @@
+{
+  "SAMPLE01": {
+    "responses": {
+      "preflight": [
+        "{\"factPatch\": {\"scopes\": [], \"claims\": [], \"permissions\": []}, \"taskPatch\": {\"baseRevision\": 0, \"refs\": [{\"evidenceId\": \"editor-0\", \"revision\": 1, \"start\": 0, \"end\": 20, \"quote\": \"Write a public note.\"}], \"objective\": \"Publish a public note\", \"intents\": [\"inform\"], \"criteria\": [{\"id\": \"minimum\", \"origin\": \"user\", \"refs\": [{\"evidenceId\": \"editor-0\", \"revision\": 1, \"start\": 0, \"end\": 20, \"quote\": \"Write a public note.\"}], \"severity\": \"blocking\", \"verification\": \"deterministic\", \"rule\": {\"kind\": \"length\", \"min\": 1, \"unit\": \"visible_characters\"}}]}}"
+      ],
+      "decide": [
+        "{\"tool\": \"write\", \"instructions\": \"Write the public body\", \"repairCriterionIds\": []}",
+        "{\"tool\": \"review\"}"
+      ],
+      "write": [
+        "{\"title\": \"Sample public title\", \"bodyMarkdown\": \"Sample public body.\", \"editorialNotes\": [{\"id\": \"note\", \"kind\": \"process\", \"text\": \"SAMPLE-INTERNAL-ONLY\", \"relatedIds\": []}]}"
+      ],
+      "review": [
+        "{\"blocking\": [], \"notes\": [], \"issues\": [], \"criterionChecks\": [], \"humanChecks\": []}"
+      ]
+    },
+    "actions": [
+      {
+        "type": "copy"
+      },
+      {
+        "type": "confirm"
+      },
+      {
+        "type": "copy"
+      },
+      {
+        "type": "save"
+      },
+      {
+        "type": "word"
+      }
+    ],
+    "assertions": [
+      {
+        "checkId": "draft",
+        "path": "outcome.type",
+        "op": "equals",
+        "value": "draft"
+      },
+      {
+        "checkId": "locked",
+        "path": "outputs.0.allowed",
+        "op": "equals",
+        "value": false
+      },
+      {
+        "checkId": "unlocked",
+        "path": "outputs.1.allowed",
+        "op": "equals",
+        "value": true
+      },
+      {
+        "checkId": "private",
+        "path": "outputs.1.output",
+        "op": "not_includes",
+        "value": "SAMPLE-INTERNAL-ONLY"
+      },
+      {
+        "checkId": "word",
+        "path": "outputs.3.allowed",
+        "op": "equals",
+        "value": true
+      }
+    ]
+  }
+}

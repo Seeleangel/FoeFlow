@@ -1,0 +1,5 @@
+{
+ "extends":"../../tsconfig.app.json",
+ "compilerOptions":{"target":"ES2022","lib":["ES2022","DOM","DOM.Iterable"],"tsBuildInfoFile":"../../node_modules/.tmp/editorial-eval.tsbuildinfo","types":["node","vite/client"],"paths":{"@/*":["../../src/*"]}},
+ "include":["./**/*.ts","../../src/vite-env.d.ts"]
+}
