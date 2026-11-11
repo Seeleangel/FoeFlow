@@ -78,6 +78,7 @@ interface PreviewPanelProps {
   editorialSession?: EditorialSession;
   onWaiveSource?: (id:string)=>void;
   onVerify?: (id:string)=>void;
+  onResolveDiagnostic?: (owner:string)=>void;
   onSelectOutput?: (output:'candidate'|'committed'|'legacy')=>void;
   editorialBusy?: boolean;
   canConfirm: boolean;
@@ -98,7 +99,7 @@ export default function PreviewPanel({
   layoutFeedbackState, onLayoutRefineRequest,
   onLayoutAnalyze, onLayoutDirectionSelect, onStyleSpecChange,
   generatedHtml, generatedText,
-  editorial, editorialSession, onWaiveSource, onVerify, onSelectOutput, editorialBusy, canConfirm, outputLocked, onConfirmFinal,
+  editorial, editorialSession, onWaiveSource, onVerify, onResolveDiagnostic, onSelectOutput, editorialBusy, canConfirm, outputLocked, onConfirmFinal,
   onCopyHtml, onSaveDraft, onExportWord,
 }: PreviewPanelProps) {
   const [analyzingMsg, analyzeIdx] = useRotatingMessage(LAYOUT_ANALYZING_MESSAGES, layoutStage ?? 'idle');
@@ -106,7 +107,7 @@ export default function PreviewPanel({
 
   return (
     <div className="h-full overflow-y-auto">
-      {editorialSession && <EditorialStatusPanel session={editorialSession} onWaiveSource={onWaiveSource} onVerify={onVerify} onSelectOutput={onSelectOutput} disabled={editorialBusy} />}
+      {editorialSession && <EditorialStatusPanel session={editorialSession} onWaiveSource={onWaiveSource} onVerify={onVerify} onResolveDiagnostic={onResolveDiagnostic} onSelectOutput={onSelectOutput} disabled={editorialBusy} />}
       {/* Article Pipeline UI */}
       {articleStage && (
         <ArticlePipeline

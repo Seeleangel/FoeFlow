@@ -24,7 +24,7 @@ export function alignFactScopes(s: EditorialSession): { scopeIds: Map<string, st
   for (const alignment of s.alignments) {
     const left = s.scopes.find(scope => scope.id === alignment.leftId), right = s.scopes.find(scope => scope.id === alignment.rightId);
     if (!left || !right || left.id === right.id || left.kind !== right.kind || !validRefs(s, alignment.refs) || ![left, right].every(scope => scope.anchors.some(anchor => alignment.refs.some(ref => covers(ref, anchor))))) {
-      diagnostics.push({ code: 'invalid_alignment', message: 'Scope alignment requires valid evidence for both identities.', refs: alignment.refs }); continue;
+      diagnostics.push({ owner:'facts:alignments:'+alignment.leftId+':'+alignment.rightId, code: 'invalid_alignment', message: 'Scope alignment requires valid evidence for both identities.', refs: alignment.refs }); continue;
     }
     alignedScopeIds.add(left.id); alignedScopeIds.add(right.id);
     const a = scopeIds.get(left.id)!, b = scopeIds.get(right.id)!, canonical = [a, b].sort()[0];
@@ -39,17 +39,20 @@ function makeGap(claim: FactClaim, kind: 'scope' | 'conflict', ids: string[], va
 /** Model candidates remain candidates: structural evidence validation cannot prove entailment or negation semantics. */
 export function resolveFacts(s: EditorialSession): FactResolution {
   const diagnostics: Diagnostics[] = [];
-  const report = (code: string, message: string, refs: EvidenceRef[] = []) => diagnostics.push({ code, message, refs });
-  if (s.claims.length > FACT_CAPACITY.claims || s.evidence.reduce((n, e) => n + e.text.length, 0) > FACT_CAPACITY.evidenceCharacters) return { claims: [], permissions: [], conflicts: [], diagnostics: [{ code: 'context_capacity', message: 'Process evidence in explicit batches; no truncated fact set is publishable.', refs: [] }] };
+  let owner='facts:resolution';
+  const report = (code: string, message: string, refs: EvidenceRef[] = []) => diagnostics.push({ owner, code, message, refs });
+  if (s.claims.length > FACT_CAPACITY.claims || s.evidence.reduce((n, e) => n + e.text.length, 0) > FACT_CAPACITY.evidenceCharacters) return { claims: [], permissions: [], conflicts: [], diagnostics: [{ owner:'facts:capacity', code: 'context_capacity', message: 'Process evidence in explicit batches; no truncated fact set is publishable.', refs: [] }] };
   const scopes: Scope[] = [];
   const scopeIdsSeen = new Set<string>();
   for (const scope of s.scopes) {
+    owner='facts:scopes:'+scope.id;
     if (!ScopeSchema.is(scope) || scopeIdsSeen.has(scope.id) || !validRefs(s, scope.anchors) || scope.qualifiers.some(q => !validRefs(s, q.refs))) report('invalid_scope', 'Scope anchors/qualifiers must identify original evidence.', scope.anchors ?? []);
     else { scopes.push(scope); scopeIdsSeen.add(scope.id); }
   }
   const aligned = alignFactScopes({ ...s, scopes }); diagnostics.push(...aligned.diagnostics);
   const claims: FactClaim[] = [], seen = new Set<string>();
   for (const raw of s.claims) {
+    owner='facts:claims:'+raw.id;
     if (!FactClaimSchema.is(raw) || seen.has(raw.id)) { report('invalid_claim', 'Malformed or duplicate fact identity.'); continue; }
     seen.add(raw.id); const claim = structuredClone(raw);
     if (!scopes.some(scope => scope.id === claim.selector.scopeId)) { report('scope_unresolved', 'Fact has no validated scope.', claim.refs); continue; }
@@ -69,6 +72,7 @@ export function resolveFacts(s: EditorialSession): FactResolution {
   }
   const superseded = new Set<string>();
   for (const claim of claims) for (const id of claim.supersedes ?? []) {
+    owner='facts:claims:'+claim.id;
     const old = claims.find(c => c.id === id);
     if (!old || id === claim.id || selectorKey(old.selector, aligned.scopeIds) !== selectorKey(claim.selector, aligned.scopeIds) || !validRefs(s, claim.statusBasis) || !claim.statusBasis.some(ref => normalized(ref.quote).includes(normalized(claim.value)) && s.evidence.find(e => e.id === ref.evidenceId)?.kind === 'editor_message') || (old.supersedes ?? []).includes(claim.id)) report('invalid_supersedes', 'Correction must target a same-selector claim and carry editor evidence.', claim.statusBasis);
     else superseded.add(id);
@@ -95,7 +99,7 @@ export function resolveFacts(s: EditorialSession): FactResolution {
   }
   const permissions = s.permissions.filter(p => {
     const valid = PermissionSchema.is(p) && validRefs(s, p.refs) && (scopes.some(scope => scope.id === p.subjectId) || claims.some(c => c.id === p.subjectId));
-    if (!valid) report('invalid_permission', 'Permission needs an identified subject, use and evidence.', p.refs); return valid;
+    if (!valid) {owner='facts:permissions:'+p.id;report('invalid_permission', 'Permission needs an identified subject, use and evidence.', p.refs);} return valid;
   });
   return { claims: current, conflicts: [...new Map(conflicts.map(g => [g.id, g])).values()], diagnostics, permissions: structuredClone(permissions) };
 }
@@ -109,7 +113,7 @@ export function permissionAllows(s: EditorialSession, subjectId: string, use: Pe
  * Preflight-only: this returns a new invalidated session. Runtime integration may instead emit its fact arrays as one facts_resolved event. */
 function patchFacts(session: EditorialSession, raw: unknown, authority: 'model' | 'editor'): EditorialSession {
   const next = structuredClone(session);
-  const touched = new Set<string>(['facts:patch']);
+  const touched = new Set<string>();
   if (raw && typeof raw === 'object') for (const key of ['claims', 'scopes', 'permissions'] as const) {
     const values: unknown = (raw as Record<string, unknown>)[key];
     if (Array.isArray(values)) for (const value of values) if (value && typeof value === 'object' && typeof value.id === 'string') touched.add('facts:' + key + ':' + value.id);
@@ -128,12 +132,14 @@ function patchFacts(session: EditorialSession, raw: unknown, authority: 'model' 
       for (const item of candidates as T[]) { if (!item || typeof item.id !== 'string') throw new Error('invalid_patch'); map.set(item.id, item); }
       return [...map.values()];
     };
+    for(const [key,schema] of [['claims',FactClaimSchema],['scopes',ScopeSchema],['permissions',PermissionSchema]] as const) {
+      const values=patch[key]; if(values===undefined)continue;
+      if(!Array.isArray(values))return diagnose('invalid_fact_patch','Expected candidate arrays.','facts:operation:'+key);
+      for(const item of values)if(!schema.is(item))return diagnose('invalid_'+key,'Malformed candidate retained as an owned failure.','facts:'+key+':'+(item&&typeof item==='object'&&typeof item.id==='string'?item.id:hashText(stableJson(item)).slice(0,24)));
+    }
     const candidate = EditorialSessionSchema.parse({ ...next, scopes: merge(next.scopes, patch.scopes), claims: merge(next.claims, patch.claims), permissions: merge(next.permissions, patch.permissions), alignments: patch.alignments === undefined ? next.alignments : [...new Map([...next.alignments, ...(patch.alignments as EditorialSession['alignments'])].map(item => [stableJson(item), item])).values()] });
     const resolved = resolveFacts(candidate);
-    for (const diagnostic of resolved.diagnostics) {
-      const owners = ['claims', 'scopes', 'permissions'].flatMap(key => (candidate[key as 'claims' | 'scopes' | 'permissions'] as { id: string; refs?: EvidenceRef[]; anchors?: EvidenceRef[] }[]).filter(item => [...item.refs ?? [], ...item.anchors ?? []].some(ref => diagnostic.refs.some(basis => stableJson(ref) === stableJson(basis)))).map(item => 'facts:' + key + ':' + item.id));
-      for (const owner of owners.length ? owners : ['facts:patch']) next.diagnostics.push({ ...diagnostic, owner });
-    }
+    for (const diagnostic of resolved.diagnostics) next.diagnostics.push(diagnostic);
     if (resolved.diagnostics.some(d => d.code === 'context_capacity')) return next;
     const claims = new Map(session.claims.map(c => [c.id, c]));
     for (const claim of resolved.claims) {
@@ -178,4 +184,11 @@ export function applyEditorFactPatch(session: EditorialSession, raw: unknown): E
 export function claimPublicationUses(s: EditorialSession, subjectId: string): PermissionUse[] {
   const uses = s.task.criteria.flatMap(c => c.rule.kind === 'permission' && c.rule.subjectIds.some(id => subjectKey(s, id) === subjectKey(s, subjectId)) ? [{ channel: c.rule.channel ?? 'public', purpose: c.rule.use, identity: c.rule.identity ?? 'not_applicable' }] : []);
   return uses.length ? uses : [{ channel: 'public', purpose: 'publication', identity: 'not_applicable' }];
+}
+
+/** Trusted editor dismissal of a rejected proposal, never an extractor/tool authority. */
+export function resolveEditorDiagnostic(session:EditorialSession,owner:string,refs:EvidenceRef[]):EditorialSession {
+ if(!session.diagnostics.some(d=>d.owner===owner)||!validRefs(session,refs)||refs.some(r=>session.evidence.find(e=>e.id===r.evidenceId)?.kind!=='editor_message'))throw Error('invalid_diagnostic_resolution');
+ const next=structuredClone(session);next.diagnostics=next.diagnostics.filter(d=>d.owner!==owner);delete next.review;delete next.layout;delete next.gate;next.humanVerifications=[];next.selectedOutput='candidate';next.revision++;
+ next.editorialNotes=[...next.editorialNotes??[],{id:'resolved-'+hashText(owner+stableJson(refs)).slice(0,24),kind:'process',text:'Editor explicitly rejected/resolved diagnostic owner '+owner,relatedIds:[owner]}];return next;
 }

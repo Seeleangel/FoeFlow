@@ -32,8 +32,9 @@ export function deriveGaps(s: EditorialSession): Gap[] {
   for (const diagnostic of [...s.diagnostics, ...result.diagnostics]) {
     // Migration is an output validation lock, not missing editor information.
     if (diagnostic.owner === 'compatibility') continue;
-    if (gaps.some(g => g.kind === 'plan_ambiguity' && g.requirementId === diagnostic.code)) continue;
-    add({ id: 'diagnostic-' + hashText(diagnostic.code).slice(0,24), requirementId: diagnostic.code, selector: { scopeId: 'task', predicate: diagnostic.code }, kind: 'plan_ambiguity', label: '任务依据或证据需要明确', reason: diagnostic.message, state: 'open', blocking: true, alternatives: [], resolutionClaimIds: [] });
+    const identity=hashText(stableJson([diagnostic.owner,diagnostic.code])).slice(0,24);
+    if(gaps.some(g=>g.id==='diagnostic-'+identity))continue;
+    add({ id: 'diagnostic-' + identity, requirementId: diagnostic.code, selector: { scopeId: diagnostic.owner ?? 'task', predicate: diagnostic.code }, kind: 'plan_ambiguity', label: '需修正 '+(diagnostic.owner ?? 'task')+'（'+diagnostic.code+'）', reason: diagnostic.message, state: 'open', blocking: true, alternatives: [], resolutionClaimIds: [] });
   }
   return [...new Map(gaps.map(g => [g.id, g])).values()];
 }

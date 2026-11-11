@@ -8,6 +8,7 @@ import { assertConfirmable, applyControlEvent } from '@/lib/editorialState';
 import { currentInputKey, hashText, type EditorialSession } from '@/lib/editorialTypes';
 import { editorialPreviewFields, requireConfirmedOutput, exportPublicDocumentToDocx } from '@/lib/editorialOutput';
 import { formatQuestion } from '@/lib/editorialGaps';
+import { resolveEditorDiagnostic } from '@/lib/editorialFacts';
 import { applyEditorTaskPatch } from '@/lib/editorialTask';
 import { canHandoff } from '@/lib/editorialController';
 import { editorialStopExplanation } from '@/lib/editorialStatus';
@@ -173,7 +174,6 @@ export default function Generator() {
         if (t.length > 0) {
           setSelectedId(t[0].id);
         }
-        if (allSessions.length) await loadSessionOnMount.current?.(allSessions[0].id);
         if (allSessions.length) await loadSessionOnMount.current?.(allSessions[0].id);
 
         if (!isWebApp) await analyzeArticleStyles();
@@ -714,8 +714,14 @@ export default function Generator() {
   const waiveSource = (id:string) => editorChange(s=>{
     const text='编辑明确豁免指定来源：'+(s.task.requiredSources.find(x=>x.id===id)?.selector.title??id);
     const eid='editor-choice-'+crypto.randomUUID();s.evidence.push({id:eid,revision:1,text,contentHash:hashText(text),kind:'editor_message',provenance:{messageId:eid},context:{scenario:'unknown'}});
+    s.evidenceRevision++;s.revision++;
     const refs=[{evidenceId:eid,revision:1,start:0,end:text.length,quote:text}];
     return applyEditorTaskPatch(s,{baseRevision:s.task.revision,refs,sourceWaivers:[{sourceRequirementId:id,actor:'editor',refs,reason:text}]});
+  });
+  const resolveDiagnostic = (owner:string)=>editorChange(s=>{
+    const text='编辑明确拒绝或处理诊断候选：'+owner,id='diagnostic-choice-'+crypto.randomUUID();
+    s.evidence.push({id,revision:1,text,contentHash:hashText(text),kind:'editor_message',provenance:{messageId:id},context:{scenario:'unknown'}});s.evidenceRevision++;s.revision++;
+    return resolveEditorDiagnostic(s,owner,[{evidenceId:id,revision:1,start:0,end:text.length,quote:text}]);
   });
   const verifyCriterion = (id:string) => editorChange(s=>{
     if (!s.activeRunId) s.activeRunId='editor-'+crypto.randomUUID();
@@ -828,6 +834,7 @@ export default function Generator() {
               editorialSession={editorialSession}
               onWaiveSource={waiveSource}
               onVerify={verifyCriterion}
+              onResolveDiagnostic={resolveDiagnostic}
               onSelectOutput={selectedOutput=>editorChange(s=>({...s,selectedOutput,revision:s.revision+1}))}
               editorialBusy={loading || confirming}
               canConfirm={canConfirm}

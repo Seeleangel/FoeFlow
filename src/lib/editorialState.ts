@@ -46,7 +46,7 @@ export function applyToolEvents(session: EditorialSession, events: readonly Edit
       case 'facts_resolved': {
         const validated = applyFactPatch(s, { scopes: e.scopes, claims: e.claims, permissions: e.permissions, ...(e.alignments ? { alignments: e.alignments } : {}) });
         if (!sameEntitySet(validated.claims, e.claims) || !sameEntitySet(validated.permissions, e.permissions) || !sameEntitySet(validated.scopes, e.scopes) || e.alignments && !sameEntitySet(validated.alignments, e.alignments)) throw new Error('unsafe_fact_snapshot');
-        const diagnostics = e.diagnostics ?? validated.diagnostics;
+        const diagnostics = [...new Map([...validated.diagnostics,...e.diagnostics??[]].map(d=>[stableJson([d.owner,d.code,d.refs]),d])).values()];
         if (!sameEntitySet(s.diagnostics, diagnostics)) { s = invalidateEditorialStamps(s); s.diagnostics = diagnostics; }
         if (sameEntitySet(s.scopes, e.scopes) && sameEntitySet(s.claims, e.claims) && sameEntitySet(s.permissions, e.permissions) && sameEntitySet(s.alignments, e.alignments ?? s.alignments)) break;
         s = invalidateEditorialStamps(s); s.scopes = e.scopes; s.claims = e.claims; s.permissions = e.permissions; s.alignments = e.alignments ?? s.alignments; s.evidenceRevision++; s.policyRevision++; break;

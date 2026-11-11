@@ -11,7 +11,7 @@ export interface TaskPatch {
 }
 const keys = new Set(['baseRevision', 'refs', 'objective', 'intents', 'readerAction', 'targetScopes', 'requirements', 'requiredSources', 'criteria', 'permittedOmissions', 'sourceWaivers', 'removeRequirementIds', 'removeSourceIds', 'removeCriterionIds']);
 function patchTask(session: EditorialSession, raw: unknown, authority: 'model' | 'editor' | 'template'): EditorialSession {
-  const reject = (): EditorialSession => ({ ...structuredClone(session), diagnostics: [...session.diagnostics.filter(d => d.code !== 'task_patch_rejected'), { code: 'task_patch_rejected', message: 'Invalid, ungrounded, stale, empty or authority-increasing task patch. Editor intervention is required for removing or weakening obligations.', refs: [] }] });
+  const reject = (): EditorialSession => ({ ...structuredClone(session), diagnostics: [...session.diagnostics.filter(d => d.code !== 'task_patch_rejected'), { owner:'task:patch', code: 'task_patch_rejected', message: 'Invalid, ungrounded, stale, empty or authority-increasing task patch. Editor intervention is required for removing or weakening obligations.', refs: [] }] });
   try {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(k => !keys.has(k))) return reject();
     const p = raw as TaskPatch;
@@ -51,7 +51,7 @@ function patchTask(session: EditorialSession, raw: unknown, authority: 'model' |
     if (p.permittedOmissions) t.permittedOmissions = [...t.permittedOmissions, ...p.permittedOmissions];
     if (p.sourceWaivers) t.sourceWaivers = [...t.sourceWaivers, ...p.sourceWaivers];
     t.coverage = { status: 'validated', refs: p.refs };
-    if (stableJson(t) === stableJson(session.task)) return structuredClone(session);
+    if (stableJson(t) === stableJson(session.task)) return {...structuredClone(session),diagnostics:session.diagnostics.filter(d=>d.code!=='task_patch_rejected')};
     t.revision++; const checked = TaskContractSchema.parse(t);
     if (!taskContractValid(session, checked)) return reject();
     const allIds = [...t.requirements, ...t.requiredSources, ...t.criteria].map(item => item.id);
