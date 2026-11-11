@@ -82,7 +82,7 @@ export async function runCase(c:EvalCase,o:RunCaseOptions):Promise<CaseResult>{
   if(plan.initialMessage!==null){await message(plan.initialMessage);execution.initial='completed';}else if(!plan.initialSession)throw Error('fixture_error:initial_state_required');
   for(const [index,action] of plan.actions.entries()){
    if(execution.actions[index].status==='completed')continue;if(abort.signal.aborted)break;
-   r.trace.push({type:'operator_action',action});
+   r.trace.push({type:'operator_action',action,authorityId:plan.stepFor(action)});
    try{
     if(action.type==='message')await message(action.text);
     else if(action.type==='select'){session={...session,selectedOutput:action.output,revision:session.revision+1};checkpoint(session);}
