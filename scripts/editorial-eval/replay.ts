@@ -1,3 +1,4 @@
+import {validateAssertion,validateAssertions,type Assertion,type ExecutionLedger} from './observations';
 import {executionPlan,isAction,type ActionSource,type ApprovedCaseProtocol} from './authority';
 import JSZip from 'jszip';
 import { runEditorialAgent } from '../../src/lib/editorialAgent';
@@ -28,6 +29,7 @@ export function parseCaseFile(bytes:string):EvalCase[] {
  const seen=new Set<string>();return bytes.split(/\r?\n/).filter(s=>s.trim()).map(line=>{
   let c:EvalCase;try{c=JSON.parse(line)}catch{throw Error('case_json')}
   if(!c||typeof c.id!=='string'||!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(c.id)||!c.input||!Array.isArray(c.input.fixtures)||!c.input.fixtures.every(f=>typeof f.id==='string'&&typeof f.title==='string'&&typeof f.text==='string')||!(c.input.initial_message===null||typeof c.input.initial_message==='string')||!Array.isArray(c.input.followups)||!c.input.followups.every(f=>typeof f.after==='string'&&typeof f.message==='string')||!Array.isArray(c.input.operator_events)||!c.oracle||typeof c.oracle.end_state!=='string'||!Array.isArray(c.oracle.checks)||!c.oracle.checks.every(a=>typeof a.id==='string'&&typeof a.criterion==='string'&&typeof a.required==='boolean'&&typeof a.evidence==='string'))throw Error('case_schema');
+  if(new Set(c.oracle.checks.map(a=>a.id)).size!==c.oracle.checks.length)throw Error('duplicate_check_id');
   if(seen.has(c.id))throw Error('duplicate_case');seen.add(c.id);return c;
  });
 }
@@ -45,50 +47,55 @@ export function redact<T>(value:T,secrets:string[]=[]):T {
  };return clean(value) as T;
 }
 export type EvalAction=({type:'message';text:string}|{type:'confirm'}|{type:'verify';criterionId:string}|{type:'waive';sourceRequirementId:string;reason:string}|{type:'select';output:'committed'|'candidate'|'legacy'}|{type:'cancel';afterCalls:number}|{type:'copy'|'save'|'word'})&{source?:ActionSource};
-export interface Recipe {initialSession?:EditorialSession;initialMessage?:string;actions?:EvalAction[];responses?:Record<string,ReplayReply[]>;assertions?:{checkId:string;path:string;op:'equals'|'includes'|'not_includes'|'nonempty';value?:unknown}[]}
-export interface CaseResult {id:string;runId:string;trial:number;outcome?:EditorialOutcome;cancelled:boolean;error?:string;modelCalls:number;legacyModelCalls:number|null;trace:unknown[];outputs:unknown[];checkpoints:{hash:string;revision:number}[];privateSpans:string[];operatorPlanRequired:boolean;unappliedFollowups:number}
-export async function runCase(c:EvalCase,o:{mode:'mock'|'real';model:EditorialModelPort;runId:string;trial:number;signal?:AbortSignal;budget?:Partial<RunBudget>;recipe?:Recipe;approvedProtocol?:ApprovedCaseProtocol}):Promise<CaseResult>{
- const plan=executionPlan(c,o.recipe,o.approvedProtocol);
- const r:CaseResult={id:c.id,runId:o.runId,trial:o.trial,cancelled:false,modelCalls:0,legacyModelCalls:null,trace:[],outputs:[],checkpoints:[],privateSpans:[],operatorPlanRequired:plan.unresolvedOperators>0,unappliedFollowups:c.input.followups.length};
+export interface Recipe {initialSession?:EditorialSession;initialMessage?:string;actions?:EvalAction[];responses?:Record<string,ReplayReply[]>;assertions?:Assertion[]}
+export interface CaseResult {execution?:ExecutionLedger;restoration?:{phase:string;sessionHash:string;selectedOutput?:string};id:string;runId:string;trial:number;outcome?:EditorialOutcome;cancelled:boolean;error?:string;modelCalls:number;legacyModelCalls:number|null;trace:unknown[];outputs:unknown[];checkpoints:{hash:string;revision:number}[];privateSpans:string[];operatorPlanRequired:boolean;unappliedFollowups:number}
+export interface RunCaseOptions {mode:'mock'|'real';model:EditorialModelPort;runId:string;trial:number;signal?:AbortSignal;budget?:Partial<RunBudget>;recipe?:Recipe;approvedProtocol?:ApprovedCaseProtocol}
+export function unexecutedCase(c:EvalCase,o:Pick<RunCaseOptions,'runId'|'trial'|'recipe'|'approvedProtocol'>):CaseResult{const plan=executionPlan(c,o.recipe,o.approvedProtocol);return {id:c.id,runId:o.runId,trial:o.trial,cancelled:true,error:'run_interrupted',modelCalls:0,legacyModelCalls:null,trace:[],outputs:[],checkpoints:[],privateSpans:[],operatorPlanRequired:plan.requiredSteps.some(s=>s.startsWith('operator:')),unappliedFollowups:c.input.followups.length,execution:{kind:plan.kind,trialStatus:'not_run',initial:plan.initialMessage===null?'not_applicable':'planned',terminalObserved:false,restorationObserved:false,requiredSteps:plan.requiredSteps,completedSteps:[],actions:plan.actions.map((a,index)=>({index,type:a.type,status:'skipped'}))}};}
+export async function runCase(c:EvalCase,o:RunCaseOptions):Promise<CaseResult>{
+ const plan=executionPlan(c,o.recipe,o.approvedProtocol);validateAssertions(c,o.recipe);
+ const execution:ExecutionLedger={kind:plan.kind,trialStatus:'running',initial:plan.initialMessage===null?'not_applicable':'planned',terminalObserved:false,restorationObserved:false,requiredSteps:plan.requiredSteps,completedSteps:[],actions:plan.actions.map((a,index)=>({index,type:a.type,status:'planned'}))};
+ const r:CaseResult={id:c.id,runId:o.runId,trial:o.trial,cancelled:false,modelCalls:0,legacyModelCalls:null,trace:[],outputs:[],checkpoints:[],privateSpans:[],operatorPlanRequired:plan.unresolvedOperators>0,unappliedFollowups:c.input.followups.length,execution};
  let session=plan.initialSession?EditorialSessionSchema.parse(plan.initialSession):createEditorialSession('eval-'+hashText(o.runId+':'+o.trial).slice(0,24));
- const sources=sourcePortForCase(c);const abort=new AbortController();const cancel=()=>abort.abort();o.signal?.addEventListener('abort',cancel,{once:true});if(o.signal?.aborted)abort.abort();
- const protect=(s:EditorialSession)=>{r.privateSpans.push(...s.claims.filter(x=>x.visibility!=='public').flatMap(x=>[x.value,...x.statusBasis.map(ref=>ref.quote)]),...(s.editorialNotes??[]).map(n=>n.text),...(s.candidate?.editorialNotes??[]).map(n=>n.text));};
- protect(session);
+ if(plan.kind==='restoration'&&plan.initialSession){execution.restorationObserved=true;r.restoration={phase:session.phase,sessionHash:hashText(stableJson(session)),selectedOutput:session.selectedOutput};}
+ const sources=sourcePortForCase(c),abort=new AbortController(),cancel=()=>abort.abort();o.signal?.addEventListener('abort',cancel,{once:true});if(o.signal?.aborted)abort.abort();
+ const protect=(s:EditorialSession)=>{r.privateSpans.push(...s.claims.filter(x=>x.visibility!=='public').flatMap(x=>[x.value,...x.statusBasis.map(ref=>ref.quote)]),...(s.editorialNotes??[]).map(n=>n.text),...(s.candidate?.editorialNotes??[]).map(n=>n.text));};protect(session);
  const checkpoint=(s:EditorialSession)=>{session=s;r.checkpoints.push({hash:hashText(stableJson(s)),revision:s.revision});protect(s);};
- const cancelAfter=plan.actions.find((a):a is Extract<EvalAction,{type:'cancel'}>=>a.type==='cancel')?.afterCalls;
+ const complete=(index:number)=>{execution.actions[index].status='completed';const step=plan.stepFor(plan.actions[index]);if(step&&!execution.completedSteps.includes(step))execution.completedSteps.push(step);};
+ const cancelIndex=plan.actions.findIndex(a=>a.type==='cancel');const cancelAction=plan.actions[cancelIndex];
  const model:EditorialModelPort=async(req,signal)=>{
   r.modelCalls++;r.trace.push({type:'model_request',stage:req.stage,input:req.data});
-  if(cancelAfter!==undefined&&r.modelCalls>=cancelAfter){abort.abort();throw new DOMException('cancelled','AbortError');}
+  if(cancelAction?.type==='cancel'&&r.modelCalls>=cancelAction.afterCalls){complete(cancelIndex);abort.abort();throw new DOMException('cancelled','AbortError');}
   const raw=await o.model(req,signal);r.trace.push({type:'model_response',stage:req.stage,raw,hash:hashText(raw)});return raw;
  };
  const message=async(text:string)=>{
-  if(abort.signal.aborted)throw new DOMException('cancelled','AbortError');
-  session=invalidateEditorialStamps(session);const id='editor-'+session.evidence.length;
+  if(abort.signal.aborted)throw new DOMException('cancelled','AbortError');session=invalidateEditorialStamps(session);const id='editor-'+session.evidence.length;
   session.evidence.push({id,revision:1,text,contentHash:hashText(text),kind:'editor_message',provenance:{messageId:id},context:{scenario:'unknown'}});session.evidenceRevision++;session.revision++;
-  r.outcome=await runEditorialAgent({session,model,signal:abort.signal,sources,budget:o.budget,runId:'turn-'+hashText(o.runId+':'+session.revision).slice(0,24),onCheckpoint:checkpoint,onToolResult:result=>r.trace.push({type:'tool',result})});session=r.outcome.session;
+  r.outcome=await runEditorialAgent({session,model,signal:abort.signal,sources,budget:o.budget,runId:'turn-'+hashText(o.runId+':'+session.revision).slice(0,24),onCheckpoint:checkpoint,onToolResult:result=>r.trace.push({type:'tool',result})});session=r.outcome.session;execution.terminalObserved=true;
  };
  try{
-  const initial=plan.initialMessage;
   r.trace.push({type:'editor_plan',kind:plan.kind,provenance:plan.provenance});
-  if(initial!==null)await message(initial);else if(!plan.initialSession)throw Error('fixture_error:initial_state_required');
-  // Conditions in natural-language followups are not guessed. A frozen recipe provides the exact editor actions.
-  for(const action of plan.actions){
+  if(plan.initialMessage!==null){await message(plan.initialMessage);execution.initial='completed';}else if(!plan.initialSession)throw Error('fixture_error:initial_state_required');
+  for(const [index,action] of plan.actions.entries()){
+   if(execution.actions[index].status==='completed')continue;if(abort.signal.aborted)break;
    r.trace.push({type:'operator_action',action});
-   if(action.type==='message'){await message(action.text);if(action.source?.kind==='followup')r.unappliedFollowups=Math.max(0,r.unappliedFollowups-1);}
-   else if(action.type==='select'){session={...session,selectedOutput:action.output,revision:session.revision+1};checkpoint(session);}
-   else if(action.type==='confirm'){
-    session=applyControlEvent(session,{type:'editor_confirmed',sessionId:session.sessionId,runId:session.activeRunId!,expectedRevision:session.revision,confirmation:{inputKey:currentInputKey(session),htmlHash:session.layout?.htmlHash??'',actor:'editor',confirmedAt:new Date().toISOString()}});checkpoint(session);
-   }else if(action.type==='verify'){session=applyControlEvent(session,{type:'human_verified',sessionId:session.sessionId,runId:session.activeRunId!,expectedRevision:session.revision,verification:{criterionId:action.criterionId,inputKey:currentInputKey(session),actor:'editor',status:'pass',verifiedAt:new Date().toISOString()}});checkpoint(session);}
-   else if(action.type==='waive'){
-    const id='waiver-'+session.evidence.length,text=action.reason;session.evidence.push({id,revision:1,text,contentHash:hashText(text),kind:'editor_message',provenance:{messageId:id},context:{scenario:'unknown'}});
-    const refs=[{evidenceId:id,revision:1,start:0,end:text.length,quote:text}];session=applyEditorTaskPatch(session,{baseRevision:session.task.revision,refs,sourceWaivers:[{sourceRequirementId:action.sourceRequirementId,refs,actor:'editor',reason:text}]});checkpoint(session);
-   }else if(action.type==='copy'||action.type==='save'||action.type==='word'){
-    try{const b=requireConfirmedOutput(session);const output=action.type==='copy'?b.layout.html:action.type==='save'?publicDraftFields(b):await wordEvidence(b.document);r.outputs.push({type:action.type,allowed:true,output});}catch{r.outputs.push({type:action.type,allowed:false});}
-   }
+   try{
+    if(action.type==='message')await message(action.text);
+    else if(action.type==='select'){session={...session,selectedOutput:action.output,revision:session.revision+1};checkpoint(session);}
+    else if(action.type==='confirm'){session=applyControlEvent(session,{type:'editor_confirmed',sessionId:session.sessionId,runId:session.activeRunId!,expectedRevision:session.revision,confirmation:{inputKey:currentInputKey(session),htmlHash:session.layout?.htmlHash??'',actor:'editor',confirmedAt:new Date().toISOString()}});checkpoint(session);}
+    else if(action.type==='verify'){session=applyControlEvent(session,{type:'human_verified',sessionId:session.sessionId,runId:session.activeRunId!,expectedRevision:session.revision,verification:{criterionId:action.criterionId,inputKey:currentInputKey(session),actor:'editor',status:'pass',verifiedAt:new Date().toISOString()}});checkpoint(session);}
+    else if(action.type==='waive'){
+     const id='waiver-'+session.evidence.length,text=action.reason;session.evidence.push({id,revision:1,text,contentHash:hashText(text),kind:'editor_message',provenance:{messageId:id},context:{scenario:'unknown'}});
+     const refs=[{evidenceId:id,revision:1,start:0,end:text.length,quote:text}];session=applyEditorTaskPatch(session,{baseRevision:session.task.revision,refs,sourceWaivers:[{sourceRequirementId:action.sourceRequirementId,refs,actor:'editor',reason:text}]});checkpoint(session);
+    }else if(action.type==='copy'||action.type==='save'||action.type==='word'){
+     try{const b=requireConfirmedOutput(session);r.outputs.push({type:action.type,allowed:true,output:action.type==='copy'?b.layout.html:action.type==='save'?publicDraftFields(b):await wordEvidence(b.document)});}catch{r.outputs.push({type:action.type,allowed:false});}
+    }
+    if(action.type!=='cancel')complete(index);
+   }catch(e){execution.actions[index].status='failed';throw e;}
   }
-  if(r.outcome)r.outcome={...r.outcome,session};
- }catch(e){if(e && typeof e==='object' && 'name' in e && e.name==='AbortError')r.cancelled=true;else r.error=e instanceof Error&&e.message.startsWith('fixture_error:')?e.message:'runner_action_failed';}
- finally{o.signal?.removeEventListener('abort',cancel);}
+  if(r.outcome)r.outcome={...r.outcome,session};execution.trialStatus=abort.signal.aborted?'cancelled':'completed';
+ }catch(e){if(execution.initial==='planned')execution.initial='failed';execution.trialStatus=abort.signal.aborted?'cancelled':'failed';if(e&&typeof e==='object'&&'name'in e&&e.name==='AbortError')r.cancelled=true;else r.error=e instanceof Error&&e.message.startsWith('fixture_error:')?e.message:'runner_action_failed';}
+ finally{o.signal?.removeEventListener('abort',cancel);r.cancelled=r.cancelled||abort.signal.aborted;for(const a of execution.actions)if(a.status==='planned')a.status='skipped';}
+ r.operatorPlanRequired=execution.requiredSteps.some(s=>s.startsWith('operator:')&&!execution.completedSteps.includes(s));r.unappliedFollowups=execution.requiredSteps.filter(s=>s.startsWith('followup:')&&!execution.completedSteps.includes(s)).length;
  protect(session);r.privateSpans=[...new Set(r.privateSpans)];return r;
 }
 export function originalStageResponses(c:EvalCase):Record<string,ReplayReply[]> {
@@ -111,7 +118,7 @@ export function parseRecipes(raw:unknown):Record<string,Recipe>{
   if(Object.keys(r).some(k=>!['actions','responses','assertions'].includes(k)))throw Error('recipe_initial_state_forbidden');
   if(r.actions!==undefined&&(!Array.isArray(r.actions)||!r.actions.every(isAction)))throw Error('recipe_schema');
   if(r.responses!==undefined&&(!r.responses||typeof r.responses!=='object'||Array.isArray(r.responses)||!Object.entries(r.responses).every(([stage,values])=>stages.has(stage)&&Array.isArray(values)&&values.every(v=>typeof v==='string'||v&&typeof v==='object'&&typeof v.error==='string'))))throw Error('recipe_schema');
-  if(r.assertions!==undefined&&(!Array.isArray(r.assertions)||!r.assertions.every(a=>a&&typeof a.checkId==='string'&&typeof a.path==='string'&&['equals','includes','not_includes','nonempty'].includes(a.op))))throw Error('recipe_schema');
+  if(r.assertions!==undefined){if(!Array.isArray(r.assertions))throw Error('recipe_schema');const ids=new Set<string>();for(const a of r.assertions){validateAssertion(a);if(ids.has(a.checkId))throw Error('duplicate_assertion');ids.add(a.checkId);}}
  }
  return raw as Record<string,Recipe>;
 }

@@ -1,7 +1,7 @@
 import {EditorialSessionSchema,hashText,stableJson,type EditorialSession} from '../../src/lib/editorialTypes';
 import type {EvalCase,EvalAction,Recipe} from './replay';
 export type ActionSource={kind:'followup'|'operator';index:number}|{kind:'protocol';step:string};
-export interface ApprovedCaseProtocol {caseSha256:string;kind:'agent'|'historical'|'restoration';approvedBy:string;approvalRef:string;initialSession?:EditorialSession;initialMessage?:string;steps:Record<string,EvalAction>}
+export interface ApprovedCaseProtocol {caseSha256:string;kind:'agent'|'historical'|'restoration';approvedBy:string;approvalRef:string;initialSession?:EditorialSession;initialMessage?:string;steps:Record<string,EvalAction>;bindings?:Record<string,{kind:'operator'|'followup';index:number}>}
 export const caseHash=(c:EvalCase)=>hashText(stableJson(c));
 export function isAction(a:unknown):a is EvalAction {
  if(!a||typeof a!=='object')return false;const x=a as EvalAction;
@@ -21,6 +21,7 @@ export function parseApprovedProtocols(raw:unknown,caseFileSha256:string):Record
 export function executionPlan(c:EvalCase,recipe?:Recipe,approved?:ApprovedCaseProtocol){
  if(recipe?.initialMessage!==undefined||recipe?.initialSession!==undefined)throw Error('recipe_initial_state_forbidden');
  if(approved){if(approved.caseSha256!==caseHash(c))throw Error('protocol_case_hash_mismatch');if(!approved.approvedBy?.trim()||!approved.approvalRef?.trim())throw Error('protocol_approval_required');if(approved.initialMessage!==undefined&&c.input.initial_message!==null)throw Error('frozen_initial_message');if(approved.initialSession&&approved.kind==='agent')throw Error('historical_setup_required');if(approved.kind==='restoration'&&(c.input.initial_message!==null||!approved.initialSession))throw Error('restoration_setup_required');}
+ if(approved?.bindings)for(const [id,b] of Object.entries(approved.bindings)){if(!approved.steps[id]||!['operator','followup'].includes(b.kind)||!Number.isInteger(b.index)||b.index<0||(b.kind==='operator'?!needsOperator(c.input.operator_events[b.index])||b.index>=c.input.operator_events.length:b.index>=c.input.followups.length))throw Error('protocol_binding');if(b.kind==='followup'&&stableJson(actionBody(approved.steps[id]))!==stableJson({type:'message',text:c.input.followups[b.index].message}))throw Error('unapproved_editor_action');}
  const used=new Set<string>();const actions=(recipe?.actions??[]).map(action=>{
   const source=action.source;if(!source)throw Error('unbound_editor_action');const key=stableJson(source);if(used.has(key))throw Error('duplicate_editor_step');used.add(key);let expected:EvalAction|undefined;
   if(source.kind==='followup'){const f=c.input.followups[source.index];if(f)expected={type:'message',text:f.message};}
@@ -29,6 +30,8 @@ export function executionPlan(c:EvalCase,recipe?:Recipe,approved?:ApprovedCasePr
   if(!expected||stableJson(actionBody(action))!==stableJson(actionBody(expected)))throw Error('unapproved_editor_action');return action;
  });
  const operators=c.input.operator_events.flatMap((e,index)=>needsOperator(e)?[index]:[]);
- const unresolvedOperators=operators.filter(index=>!actions.some(a=>a.source?.kind==='operator'&&a.source.index===index)&&!approved).length;
- return {initialMessage:c.input.initial_message??approved?.initialMessage??null,initialSession:approved?.initialSession,actions,kind:approved?.kind??'agent',unresolvedOperators,provenance:approved?{caseSha256:approved.caseSha256,approvedBy:approved.approvedBy,approvalRef:approved.approvalRef}:null};
+ const unresolvedOperators=operators.filter(index=>!actions.some(a=>a.source?.kind==='operator'&&a.source.index===index)&&!actions.some(a=>a.source?.kind==='protocol'&&approved?.bindings?.[a.source.step]?.kind==='operator'&&approved.bindings[a.source.step].index===index)).length;
+ const requiredSteps=[...operators.map(i=>'operator:'+i),...c.input.followups.map((_,i)=>'followup:'+i)];
+ const stepFor=(action:EvalAction)=>{const source=action.source?.kind==='protocol'?approved?.bindings?.[action.source.step]:action.source;return source&&'index'in source?source.kind+':'+source.index:undefined;};
+ return {requiredSteps,stepFor,initialMessage:c.input.initial_message??approved?.initialMessage??null,initialSession:approved?.initialSession,actions,kind:approved?.kind??'agent',unresolvedOperators,provenance:approved?{caseSha256:approved.caseSha256,approvedBy:approved.approvedBy,approvalRef:approved.approvalRef}:null};
 }

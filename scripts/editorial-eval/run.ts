@@ -1,3 +1,4 @@
+import {validateAssertions} from './observations';
 import {executionPlan,parseApprovedProtocols,type ApprovedCaseProtocol} from './authority';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {resolve,dirname,join,basename} from 'node:path';
@@ -6,7 +7,7 @@ import {EDITORIAL_STAGE_PROMPTS} from '../../src/lib/editorialPrompts';
 import {prepareAgentContext} from '../../src/lib/agentRuntime';
 import type {EditorialModelPort} from '../../src/lib/editorialController';
 import {DEFAULT_RUN_BUDGET} from '../../src/lib/editorialTypes';
-import {StageReplay,parseCaseFile,parseRecipes,replayQueues,runCase,redact,type Recipe} from './replay';
+import {StageReplay,parseCaseFile,parseRecipes,replayQueues,runCase,unexecutedCase,redact,type Recipe} from './replay';
 import {caseMetrics,groupedMetrics} from './metrics';
 import {verifyHash,makeManifest,configSummary,type ModelConfig} from './manifest';
 export function realModel(config:ModelConfig,record:(meta:unknown)=>void,transport:typeof fetch=fetch):EditorialModelPort {
@@ -28,7 +29,7 @@ export function parseArgs(args:string[]){
  for(let i=0;i<args.length;i++){const a=args[i];if(!a.startsWith('--'))throw Error('invalid_arguments');const key=a.slice(2);if(flags.has(key)){out[key]=true;continue;}if(!values.has(key)||!args[i+1]||args[i+1].startsWith('--'))throw Error('invalid_arguments');out[key]=args[++i];}
  if(!out.cases)throw Error('cases_required');const modes=['dry-run','mock','real'].filter(k=>out[k]);if(modes.length!==1)throw Error('choose_one_mode');return out;
 }
-export async function main(args:string[],env:Record<string,string|undefined>=process.env){
+export async function main(args:string[],env:Record<string,string|undefined>=process.env,control:{signal?:AbortSignal}={}){
  const a=parseArgs(args);const casePath=resolve(String(a.cases));
  if(!a['allow-acceptance']&&/[/\\](blind[^/\\]*|sealed)[/\\]/i.test(casePath))throw Error('acceptance_assets_require_explicit_mode');
  const bytes=await readFile(casePath);const casesHash=verifyHash(bytes,typeof a.sha256==='string'?a.sha256:undefined);const all=parseCaseFile(bytes.toString('utf8'));if(!all.length)throw Error('empty_cases');
@@ -43,7 +44,7 @@ export async function main(args:string[],env:Record<string,string|undefined>=pro
  if(a.recipe){const recipePath=resolve(String(a.recipe));if(!a['allow-acceptance']&&/[/\\](blind[^/\\]*|sealed)[/\\]/i.test(recipePath))throw Error('acceptance_assets_require_explicit_mode');const raw=await readFile(recipePath);recipeHash=verifyHash(raw);recipes=parseRecipes(JSON.parse(raw.toString('utf8')));}
  let protocols:Record<string,ApprovedCaseProtocol>={};let protocolHash:string|undefined;
  if(a.protocol){if(!a['allow-acceptance']||typeof a['protocol-sha256']!=='string')throw Error('approved_protocol_requires_explicit_mode_and_hash');const raw=await readFile(resolve(String(a.protocol)));protocolHash=verifyHash(raw,a['protocol-sha256']);protocols=parseApprovedProtocols(JSON.parse(raw.toString('utf8')),casesHash);}
- for(const c of selected)executionPlan(c,recipes[c.id],protocols[c.id]);
+ for(const c of selected){executionPlan(c,recipes[c.id],protocols[c.id]);validateAssertions(c,recipes[c.id]);}
  if(a.real&&selected.some(c=>(c.input.initial_message===null||c.input.followups.length||c.input.operator_events.length)&&!recipes[c.id]?.actions))throw Error('operator_recipe_required');
  for(const c of selected)replayQueues(c,recipes[c.id]?.responses);
  const runId='editorial-'+randomUUID();const root=process.cwd();const out=resolve(String(a.out??join('.git','editorial-eval',runId)));
@@ -53,16 +54,16 @@ export async function main(args:string[],env:Record<string,string|undefined>=pro
  await save('manifest.json',manifest,[config.key??'']);
  const modelCallUpperBound=selected.reduce((sum,c)=>sum+trials*DEFAULT_RUN_BUDGET.modelCalls*(1+(recipes[c.id]?.actions?.filter(a=>a.type==='message').length??0)),0);
  if(a['dry-run']){const result={runId,mode:'dry-run',validated:all.length,selected:selected.length,trials,casesHash,networkCalls:0,modelCallUpperBound,needsOperatorRecipe:selected.filter(c=>c.input.initial_message===null||c.input.operator_events.length||c.input.followups.length).map(c=>c.id),config:configSummary(config)};await save('dry-run.json',result);console.log(JSON.stringify(result));return result;}
- const metrics=[];const allPrivateSpans:string[]=[];const abort=new AbortController();const stop=()=>abort.abort();process.once('SIGINT',stop);process.once('SIGTERM',stop);
+ const metrics=[];const allPrivateSpans:string[]=[];const abort=new AbortController();const stop=()=>abort.abort();process.once('SIGINT',stop);process.once('SIGTERM',stop);control.signal?.addEventListener('abort',stop,{once:true});if(control.signal?.aborted)abort.abort();
  try{
   for(const c of selected)for(let trial=1;trial<=trials;trial++){
-   if(abort.signal.aborted)break;const recipe=recipes[c.id];const queues=replayQueues(c,recipe?.responses);const q=new StageReplay(queues.effective);const requests:unknown[]=[];
+   const recipe=recipes[c.id];const queues=replayQueues(c,recipe?.responses);const q=new StageReplay(queues.effective);const requests:unknown[]=[];
    const model=a.mock?q.call:realModel(config,meta=>requests.push(meta));
-   const r=await runCase(c,{mode:a.mock?'mock':'real',model,runId,trial,recipe,approvedProtocol:protocols[c.id],signal:abort.signal});
+   const r=abort.signal.aborted?unexecutedCase(c,{runId,trial,recipe,approvedProtocol:protocols[c.id]}):await runCase(c,{mode:a.mock?'mock':'real',model,runId,trial,recipe,approvedProtocol:protocols[c.id],signal:abort.signal});
    const m=caseMetrics(c,r,recipe);metrics.push(m);const secrets=[config.key??'',...r.privateSpans];allPrivateSpans.push(...r.privateSpans);
    await save(c.id+'-'+trial+'.json',{...r,privateSpans:undefined,requests,queueEvidence:{originalHashes:queues.originalHashes,effectiveHashes:queues.effectiveHashes,consumed:a.mock?q.consumed:null},remaining:a.mock?q.remaining():undefined,metrics:m},secrets);
   }
- }finally{process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);}
+ }finally{process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);control.signal?.removeEventListener('abort',stop);}
  const summary={runId,casesHash,...groupedMetrics(metrics),modelCallUpperBound};await save('summary.json',summary);
  await save('assertions.json',metrics,[config.key??'',...allPrivateSpans]);console.log(JSON.stringify(summary));return summary;
 }
