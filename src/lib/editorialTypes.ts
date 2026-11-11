@@ -24,7 +24,7 @@ export interface InformationRequirement { id: Id; selector: FactSelector; label:
 export interface SourceWaiver { sourceRequirementId: Id; refs: EvidenceRef[]; actor: 'editor'; reason: string }
 export interface TaskContract { schemaVersion: 2; revision: number; objective: string; intents: ('inform' | 'call_to_action' | 'retrospective' | 'interview' | 'edit' | 'example' | 'other')[]; readerAction?: string; targetScopes: Id[]; requirements: InformationRequirement[]; requiredSources: RequiredSource[]; criteria: AcceptanceCriterion[]; permittedOmissions: { requirementId: Id; refs: EvidenceRef[] }[]; sourceWaivers: SourceWaiver[] }
 export interface Gap { id: Id; requirementId: Id; kind: 'missing' | 'conflict' | 'permission' | 'scope' | 'source_unavailable' | 'plan_ambiguity'; selector: FactSelector; label: string; reason: string; state: 'open' | 'asked' | 'resolved' | 'waived'; blocking: boolean; alternatives: { id: Id; label: string; refs: EvidenceRef[] }[]; resolutionClaimIds: Id[]; askedAtMessageId?: Id }
-export interface QuestionBatch { id: Id; gapIds: Id[]; items: { gapId: Id; subject: string; requested: string; why: string; options: string[] }[] }
+export interface QuestionBatch { id: Id; gapIds: Id[]; remainingGapIds?: Id[]; items: { gapId: Id; subject: string; requested: string; why: string; options: string[] }[] }
 export interface EditorialNote { id: Id; kind: 'asset' | 'fact_check' | 'process' | 'advisory'; text: string; relatedIds: Id[] }
 export interface AssetUse { assetId: Id; slotId: Id; use: string; channel?: string; identity?: PermissionUse['identity']; publicCaption?: string; state: 'included' | 'placeholder' | 'omitted' }
 export interface ContentBlock { id: Id; kind: 'paragraph' | 'heading' | 'list' | 'quote' | 'asset_slot'; text: string }
@@ -119,7 +119,7 @@ const requirement = obj({ id, selector, label: id, reason: id, refs, necessity: 
 const waiver = obj({ sourceRequirementId: id, refs, actor: en('editor'), reason: id });
 const task = obj({ schemaVersion: en(2), revision: num, objective: str, intents: arr(en('inform', 'call_to_action', 'retrospective', 'interview', 'edit', 'example', 'other')), readerAction: opt(id), targetScopes: ids, requirements: arr(requirement), requiredSources: arr(source), criteria: arr(criterion), permittedOmissions: arr(obj({ requirementId: id, refs })), sourceWaivers: arr(waiver) });
 const gap = obj({ id, requirementId: id, kind: en('missing', 'conflict', 'permission', 'scope', 'source_unavailable', 'plan_ambiguity'), selector, label: id, reason: id, state: en('open', 'asked', 'resolved', 'waived'), blocking: bool, alternatives: arr(obj({ id, label: id, refs })), resolutionClaimIds: ids, askedAtMessageId: opt(id) });
-const question = obj({ id, gapIds: ids, items: arr(obj({ gapId: id, subject: id, requested: id, why: id, options: arr(str) })) });
+const question = obj({ id, gapIds: ids, remainingGapIds: opt(ids), items: arr(obj({ gapId: id, subject: id, requested: id, why: id, options: arr(str) })) });
 const note = obj({ id, kind: en('asset', 'fact_check', 'process', 'advisory'), text: str, relatedIds: ids });
 const asset = obj({ assetId: id, slotId: id, use: id, channel: opt(id), identity: opt(en('named', 'anonymous', 'not_applicable')), publicCaption: opt(str), state: en('included', 'placeholder', 'omitted') });
 const block = obj({ id, kind: en('paragraph', 'heading', 'list', 'quote', 'asset_slot'), text: str });

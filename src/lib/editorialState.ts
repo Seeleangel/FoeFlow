@@ -59,7 +59,7 @@ export function applyToolEvents(session: EditorialSession, events: readonly Edit
         validContent(s); if (e.layout.contentHash !== s.candidate!.contentHash || e.layout.htmlHash !== hashText(e.layout.html)) throw new Error('stale_layout'); s.layout = e.layout; break;
       case 'gate_recorded':
         if (!sameInputKey(e.gate.inputKey, currentInputKey(s))) throw new Error('stale_gate'); s.gate = e.gate; break;
-      case 'question_recorded': s.lastQuestion = e.question; s.phase = 'waiting_input'; break;
+      case 'question_recorded': s.lastQuestion = e.question; s.gaps = s.gaps.map(g => e.question.gapIds.includes(g.id) ? { ...g, state: 'asked', askedAtMessageId: s.evidence.filter(record => record.kind === 'editor_message').slice(-1)[0]?.provenance.messageId } : g); s.phase = 'waiting_input'; break;
       case 'stopped': s.phase = e.phase; s.lastStop = { code: e.code, unresolvedIds: e.unresolvedIds, nextActions: e.nextActions }; break;
     }
   }
