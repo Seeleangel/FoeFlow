@@ -38,20 +38,26 @@ export const publicTextKey = (text: string): string => text.normalize('NFKC').re
 export function containsProtectedText(s: EditorialSession, text: string): boolean { return protectedValues(s).some(value => !!publicTextKey(value) && publicTextKey(text).includes(publicTextKey(value))); }
 export interface WriterContext {
   objective: string; intents: EditorialSession['task']['intents'];
-  claims: { id: string; selector: FactSelector; value: string; evidenceIds: string[] }[];
+  claims: { id: string; selector: Omit<FactSelector, 'cardinalityRefs'>; value: string; evidenceIds: string[] }[];
   constraints: { id: string; kind: string; rule: CriterionRule; relatedIds: string[] }[];
   currentDraft?: { title: string; bodyMarkdown: string }; repairCriterionIds: string[];
   assetSlots: { assetId: string; slotId: string; state: 'omitted' | 'placeholder' | 'included' }[];
+}
+/** All writer strings are bounded and scrubbed of known restricted values and note-channel text. */
+export function writerSafeProjection<T>(s:EditorialSession,value:T):T {
+ const restricted=[...protectedValues(s),...[...s.editorialNotes??[],...s.candidate?.editorialNotes??[],...s.review?.notes??[]].map(n=>n.text)].filter(Boolean);
+ const safe=(v:unknown):unknown=> typeof v==='string' ? (containsProtectedText(s,v)||restricted.some(text=>publicTextKey(v).includes(publicTextKey(text))) ? '[restricted content withheld]' : v.slice(0,24000)) : Array.isArray(v) ? v.map(safe) : v&&typeof v==='object' ? Object.fromEntries(Object.entries(v).map(([k,x])=>[k,safe(x)])) : v;
+ return safe(value) as T;
 }
 /** No conversation, raw enclosing quotes, internal notes or unfiltered evidence enters writer input. */
 export function buildWriterContext(s: EditorialSession, repairCriterionIds: string[] = []): WriterContext {
   const result = resolveFacts(s); const conflictScopes = new Set(result.conflicts.map(g => canonicalScopeId(s, g.selector.scopeId)));
   const claims = result.claims.filter(c => c.epistemic === 'supported' && c.visibility === 'public' && !conflictScopes.has(canonicalScopeId(s, c.selector.scopeId)) && !containsProtectedText(s, c.value) && [c.id, c.selector.scopeId].every(subject => !hasSubjectPermissions(s, subject) || claimPublicationUses(s, subject).every(use => permissionAllows(s, subject, use))));
   const current = s.candidate && !containsProtectedText(s, s.candidate.title + s.candidate.bodyMarkdown) ? { title: s.candidate.title, bodyMarkdown: s.candidate.bodyMarkdown } : undefined;
-  return { objective: containsProtectedText(s, s.task.objective) ? 'Prepare the public article using the approved claims and constraints.' : s.task.objective,
-    intents: [...s.task.intents], claims: claims.map(c => ({ id: c.id, selector: structuredClone(c.selector), value: c.value, evidenceIds: [...new Set(c.refs.map(r => r.evidenceId))] })),
+  return writerSafeProjection(s, { objective: containsProtectedText(s, s.task.objective) ? 'Prepare the public article using the approved claims and constraints.' : s.task.objective,
+    intents: [...s.task.intents], claims: claims.map(c => ({ id: c.id, selector: { scopeId:c.selector.scopeId, predicate:c.selector.predicate, ...(c.selector.metric?{metric:structuredClone(c.selector.metric)}:{}), ...(c.selector.cardinality?{cardinality:c.selector.cardinality}:{}) }, value: c.value, evidenceIds: [...new Set(c.refs.map(r => r.evidenceId))] })),
     constraints: s.task.criteria.map(c => ({ id: c.id, kind: c.rule.kind, rule: c.rule.kind === 'semantic' && containsProtectedText(s, c.rule.instruction) ? { kind: 'semantic', instruction: 'Follow the public task constraints without disclosing restricted material.' } : structuredClone(c.rule), relatedIds: c.rule.kind === 'include_facts' || c.rule.kind === 'exclude_claims' ? [...c.rule.factIds] : c.rule.kind === 'permission' ? [...c.rule.subjectIds] : [] })),
-    currentDraft: current, repairCriterionIds: repairCriterionIds.filter(id => s.task.criteria.some(c => c.id === id)), assetSlots: s.candidate?.assets.map(a => ({ assetId: a.assetId, slotId: a.slotId, state: a.state })) ?? [] };
+    currentDraft: current, repairCriterionIds: repairCriterionIds.filter(id => s.task.criteria.some(c => c.id === id)), assetSlots: s.candidate?.assets.map(a => ({ assetId: a.assetId, slotId: a.slotId, state: a.state })) ?? [] });
 }
 /** Safe sidebar summaries are separate from the public document and the full local evidence. */
 export function summarizeEditorialNotes(s: EditorialSession): EditorialNote[] {
