@@ -272,3 +272,19 @@ export async function cleanupOldImages(maxAgeDays: number = 30): Promise<void> {
     console.error('[cleanupOldImages] 清理失败:', error);
   }
 }
+
+/** Read-only source port: never returns params, HTML, API configuration or session checkpoints. */
+export async function readEditorialLibraryDocument(documentId: string): Promise<{ documentId: string; title: string; text: string; complete: boolean; kind: 'library' | 'legacy_draft' } | undefined> {
+  const db = await getDb();
+  if (documentId.startsWith('article:')) {
+    const rows = await db.select<{ id: string; title: string; content: string }[]>('SELECT id, title, content FROM user_articles WHERE id = ?', [documentId.slice(8)]);
+    const row = rows[0]; return row ? { documentId, title: row.title, text: row.content, complete: true, kind: 'library' } : undefined;
+  }
+  if (documentId.startsWith('draft:')) {
+    const rows = await db.select<{ id: string; params_json: string; content_text: string }[]>("SELECT id, params_json, content_text FROM generated_drafts WHERE id = ? AND mode != 'generator-session'", [documentId.slice(6)]);
+    const row = rows[0]; if (!row) return undefined;
+    let title = '未命名'; try { const params: unknown = JSON.parse(row.params_json || '{}'); if (params && typeof params === 'object' && 'title' in params && typeof params.title === 'string') title = params.title; } catch { /* keep display fallback */ }
+    return { documentId, title, text: row.content_text, complete: true, kind: 'legacy_draft' };
+  }
+  return undefined;
+}

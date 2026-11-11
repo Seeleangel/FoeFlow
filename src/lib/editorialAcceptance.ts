@@ -7,9 +7,9 @@ const normalized = (text: string) => visibleBlockText(text).normalize('NFKC').re
 export function sourceRequirementSatisfied(s: EditorialSession, source: RequiredSource): boolean {
   return s.readReceipts.some(receipt => (!receipt.sourceRequirementId || receipt.sourceRequirementId === source.id) && !!receipt.contextHash && receipt.evidenceIds.length > 0 && receipt.evidenceIds.every(id => {
     const e = s.evidence.find(e => e.id === id);
-    return !!e && (e.kind === 'library' || e.kind === 'import') && e.provenance.documentId === receipt.documentId && (!source.selector.documentId || source.selector.documentId === receipt.documentId) &&
+    return !!e && (e.kind === 'library' || e.kind === 'import' || e.kind === 'legacy_draft') && e.provenance.documentId === receipt.documentId && (!source.selector.documentId || source.selector.documentId === receipt.documentId) &&
       // A title-only source needs an explicit resolved requirement ID from the source port, not a guessed title.
-      (!!source.selector.documentId || receipt.sourceRequirementId === source.id) && receipt.contentHash === e.contentHash && e.contentHash === hashText(e.text) && receipt.range[0] >= 0 && receipt.range[1] <= e.text.length && receipt.range[1] > receipt.range[0] && (source.depth !== 'full_document' || receipt.range[0] === 0 && receipt.range[1] === e.text.length);
+      (!!source.selector.documentId || receipt.sourceRequirementId === source.id) && receipt.contentHash === e.contentHash && e.contentHash === hashText(e.text) && receipt.range[0] >= 0 && receipt.range[1] <= e.text.length && receipt.range[1] > receipt.range[0] && (source.depth !== 'full_document' || e.provenance.complete !== false && receipt.range[0] === 0 && receipt.range[1] === e.text.length);
   }));
 }
 export function sourceWaiver(s: EditorialSession, sourceId: string): string | undefined {

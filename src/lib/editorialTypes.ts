@@ -2,7 +2,7 @@
 export type Id = string;
 export type Hash = string;
 export interface EvidenceRef { evidenceId: Id; revision: number; start: number; end: number; quote: string }
-export interface EvidenceRecord { id: Id; revision: number; contentHash: Hash; kind: 'editor_message' | 'library' | 'import' | 'legacy_draft'; text: string; provenance: { documentId?: Id; messageId?: Id; originClaimIds?: Id[] }; context: { scenario: 'real' | 'simulation' | 'unknown'; asOf?: string } }
+export interface EvidenceRecord { id: Id; revision: number; contentHash: Hash; kind: 'editor_message' | 'library' | 'import' | 'legacy_draft'; text: string; provenance: { documentId?: Id; documentTitle?: string; complete?: boolean; messageId?: Id; originClaimIds?: Id[] }; context: { scenario: 'real' | 'simulation' | 'unknown'; asOf?: string } }
 export interface Scope { id: Id; kind: 'event' | 'person' | 'organization' | 'asset' | 'project' | 'other'; label: string; parentId?: Id; qualifiers: { key: string; value: string; refs: EvidenceRef[] }[]; anchors: EvidenceRef[]; identity: 'provisional' | 'aligned' }
 export interface ScopeAlignment { leftId: Id; rightId: Id; refs: EvidenceRef[] }
 export interface MetricSpec { measure: string; unit: string; population: string; phase?: string; period?: string; aggregation: 'single' | 'total' | 'sample' | 'cumulative' | 'unknown'; precision: 'exact' | 'approximate' | 'unknown' }
@@ -83,7 +83,8 @@ export type EditorialControlEvent = EventEnvelope & (
   | { type: 'editor_confirmed'; confirmation: Confirmation }
   | { type: 'human_verified'; verification: HumanVerification }
   | { type: 'run_cancelled' });
-export interface ToolResult { tool: ToolAction['tool']; status: 'progress' | 'no_progress' | 'rejected' | 'failed'; code: string; changedIds: Id[]; events: EditorialToolEvent[]; allowedNext: ToolAction['tool'][]; diagnostics: Diagnostics[] }
+export interface LoadedSource { sourceRequirementId?: Id; documentId: Id; evidenceId: Id; range: [number, number] }
+export interface ToolResult { loadedSources?: LoadedSource[]; tool: ToolAction['tool']; status: 'progress' | 'no_progress' | 'rejected' | 'failed'; code: string; changedIds: Id[]; events: EditorialToolEvent[]; allowedNext: ToolAction['tool'][]; diagnostics: Diagnostics[] }
 
 // Small dependency-free runtime schema combinators. Only the checked parse boundary asserts T.
 type Check = (v: unknown) => boolean;
@@ -100,7 +101,7 @@ export interface RuntimeSchema<T> { parse(value: unknown): T; is(value: unknown)
 function schema<T>(check: Check): RuntimeSchema<T> { return { parse(value) { if (!check(value)) throw new Error('invalid_schema'); return structuredClone(value) as T; }, is: (value): value is T => check(value) }; }
 const ref = obj({ evidenceId: id, revision: num, start: num, end: num, quote: id });
 const refs = arr(ref), ids = arr(id);
-const evidence = obj({ id, revision: num, contentHash: id, kind: en('editor_message', 'library', 'import', 'legacy_draft'), text: str, provenance: obj({ documentId: opt(id), messageId: opt(id), originClaimIds: opt(ids) }), context: obj({ scenario: en('real', 'simulation', 'unknown'), asOf: opt(str) }) });
+const evidence = obj({ id, revision: num, contentHash: id, kind: en('editor_message', 'library', 'import', 'legacy_draft'), text: str, provenance: obj({ documentId: opt(id), documentTitle: opt(str), complete: opt(bool), messageId: opt(id), originClaimIds: opt(ids) }), context: obj({ scenario: en('real', 'simulation', 'unknown'), asOf: opt(str) }) });
 const scope = obj({ id, kind: en('event', 'person', 'organization', 'asset', 'project', 'other'), label: id, parentId: opt(id), qualifiers: arr(obj({ key: id, value: id, refs })), anchors: refs, identity: en('provisional', 'aligned') });
 const alignment = obj({ leftId: id, rightId: id, refs });
 const metric = obj({ measure: id, unit: id, population: id, phase: opt(str), period: opt(str), aggregation: en('single', 'total', 'sample', 'cumulative', 'unknown'), precision: en('exact', 'approximate', 'unknown') });
@@ -165,7 +166,7 @@ export const ToolActionSchema = schema<ToolAction>(union(
   obj({ tool: en('search'), query: id, forRequirementIds: ids }), obj({ tool: en('read'), documentId: id, sourceRequirementId: id, range: opt(range) }),
   obj({ tool: en('write'), instructions: id, repairCriterionIds: ids }), obj({ tool: en('review') }), obj({ tool: en('layout'), themeId: id }), obj({ tool: en('ask'), gapIds: ids }), obj({ tool: en('submit') })
 ));
-export const ToolResultSchema = schema<ToolResult>(obj({ tool: en('search', 'read', 'write', 'review', 'layout', 'ask', 'submit'), status: en('progress', 'no_progress', 'rejected', 'failed'), code: id, changedIds: ids, events: arr(toolEvent), allowedNext: arr(en('search', 'read', 'write', 'review', 'layout', 'ask', 'submit')), diagnostics: arr(diagnostic) }));
+export const ToolResultSchema = schema<ToolResult>(obj({ tool: en('search', 'read', 'write', 'review', 'layout', 'ask', 'submit'), status: en('progress', 'no_progress', 'rejected', 'failed'), code: id, changedIds: ids, events: arr(toolEvent), allowedNext: arr(en('search', 'read', 'write', 'review', 'layout', 'ask', 'submit')), diagnostics: arr(diagnostic), loadedSources: opt(arr(obj({ sourceRequirementId: opt(id), documentId: id, evidenceId: id, range }))) }));
 export const EditorialOutcomeSchema = schema<EditorialOutcome>(union(
   obj({ type: en('question'), session, question }), obj({ type: en('draft'), session, artifact: draft, handoff: obj({ status: en('pending') }) }), obj({ type: en('incomplete', 'failed'), session, reason: id })
 ));
