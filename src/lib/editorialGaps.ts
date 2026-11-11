@@ -30,6 +30,8 @@ export function deriveGaps(s: EditorialSession): Gap[] {
     add({ id: 'source-' + hashText(source.id).slice(0,24), requirementId: source.id, selector: { scopeId: 'source:' + source.id, predicate: 'source_read' }, kind: 'source_unavailable', label: source.selector.title ?? source.selector.documentId ?? source.id, reason: source.purpose, state: waived ? 'waived' : satisfied ? 'resolved' : 'open', blocking: true, alternatives: [{ id: 'supply', label: '提供指定素材', refs: [] }, { id: 'waive', label: '编辑明确豁免并留记录', refs: [] }], resolutionClaimIds: [] });
   }
   for (const diagnostic of [...s.diagnostics, ...result.diagnostics]) {
+    // Migration is an output validation lock, not missing editor information.
+    if (diagnostic.owner === 'compatibility') continue;
     if (gaps.some(g => g.kind === 'plan_ambiguity' && g.requirementId === diagnostic.code)) continue;
     add({ id: 'diagnostic-' + hashText(diagnostic.code).slice(0,24), requirementId: diagnostic.code, selector: { scopeId: 'task', predicate: diagnostic.code }, kind: 'plan_ambiguity', label: '任务依据或证据需要明确', reason: diagnostic.message, state: 'open', blocking: true, alternatives: [], resolutionClaimIds: [] });
   }

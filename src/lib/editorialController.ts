@@ -219,8 +219,10 @@ export async function runEditorialController(options: ControllerOptions): Promis
           writeKeys.add(key); used.writes++; const rawDraft = await ask('write', buildWriterContext(s, repairs, {instructions:action.instructions,invalidArtifact:!!lastWriteFailure}) as unknown as Record<string, unknown>);
           let parsed = parseDraftArtifact(rawDraft, { id: 'candidate', revision: (s.candidate?.revision ?? 0) + 1 });
           if (!parsed.artifact && !repairUsed && /^[{`]/.test(rawDraft.trim())) { try { parseJsonObject(rawDraft); } catch { repairUsed = true; parsed = parseDraftArtifact(await ask('repair', { stage: 'write', invalidResponse: rawDraft }), { id: 'candidate', revision: (s.candidate?.revision ?? 0) + 1 }); } }
+          // A fresh model response is fresh provenance, including the supported Markdown wire format.
+          if(parsed.artifact) parsed.artifact.origin='model';
           if (!parsed.artifact) { lastWriteFailure = 'invalid_artifact'; toolResult('write', 'rejected', 'invalid_artifact'); }
-          else if (contentHistory.has(parsed.artifact.contentHash)) { if (parsed.artifact.editorialNotes.length) emit([{ type: 'notes_recorded', notes: parsed.artifact.editorialNotes }]); toolResult('write', 'no_progress', 'content_cycle'); }
+          else if (contentHistory.has(parsed.artifact.contentHash) && s.candidate?.origin !== 'legacy') { if (parsed.artifact.editorialNotes.length) emit([{ type: 'notes_recorded', notes: parsed.artifact.editorialNotes }]); toolResult('write', 'no_progress', 'content_cycle'); }
           else { lastWriteFailure = ''; contentHistory.add(parsed.artifact.contentHash); emit([{ type: 'candidate_updated', artifact: parsed.artifact }]); toolResult('write', 'progress', 'candidate_updated'); }
         }
       } else if (action.tool === 'review') await review();
