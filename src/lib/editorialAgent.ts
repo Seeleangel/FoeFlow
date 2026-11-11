@@ -4,7 +4,7 @@ import { createEditorialSession, hashText, type EditorialSession, type Editorial
 import { runEditorialController, type ControllerOptions, type EditorialModelPort } from './editorialController';
 import { EDITORIAL_STAGE_PROMPTS } from './editorialPrompts';
 import { formatQuestion } from './editorialGaps';
-import { projectPublicArtifact, publicTextKey } from './editorialDocument';
+import { projectPublicArtifact, publicTextKey, parseDraftArtifact } from './editorialDocument';
 import type { SourcePort } from './editorialSources';
 export interface EditorialHandoff { status: 'pending' | 'confirmed'; notes: string[]; sources: string[] }
 export type EditorialResult =
@@ -28,6 +28,8 @@ export function legacyEditorialSession(options: Pick<LegacyEditorialOptions, 'me
     return [{ id, revision: 1, text: message.content, contentHash: hashText(message.content), kind: 'editor_message' as const, provenance: { messageId: id }, context: { scenario: 'unknown' as const } }];
   });
   if (options.previousDraft.trim()) s.evidence.push({ id: 'previous-draft', revision: 1, text: options.previousDraft, contentHash: hashText(options.previousDraft), kind: 'legacy_draft', provenance: {}, context: { scenario: 'unknown' } });
+  // An editing surface is not factual evidence, a review or confirmation.
+  if(options.previousDraft.trim()) {const parsed=parseDraftArtifact(options.previousDraft,{id:'previous-candidate',revision:1,legacyTitle:'Previous draft'});if(parsed.artifact){s.candidate={...parsed.artifact,origin:'legacy'};s.phase='writing';}}
   return s;
 }
 export function legacyEditorialResult(outcome: EditorialOutcome): EditorialResult {
