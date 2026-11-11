@@ -33,7 +33,7 @@ export interface InputKey { contentHash: Hash; evidenceRevision: number; taskRev
 export interface GateCheck { criterionId: Id; status: 'pass' | 'fail' | 'unknown'; verifier: string; detail: string }
 export interface GateReport { inputKey: InputKey; checks: GateCheck[]; blockers: string[] }
 export interface ReviewIssue { id: Id; category: 'unsupported_claim' | 'scope' | 'privacy' | 'permission' | 'workflow_leak' | 'constraint' | 'style'; severity: 'blocking' | 'advisory'; relatedIds: Id[]; span?: { blockId: Id; start: number; end: number }; detail: string }
-export interface ReviewStamp { inputKey: InputKey; issues: ReviewIssue[]; blocking: string[]; notes: EditorialNote[] }
+export interface ReviewStamp { inputKey: InputKey; issues: ReviewIssue[]; blocking: string[]; notes: EditorialNote[]; criterionChecks?: GateCheck[] }
 export interface LayoutStamp { contentHash: Hash; themeId: string; themeVersion: string; html: string; htmlHash: Hash }
 export interface Confirmation { inputKey: InputKey; htmlHash: Hash; actor: 'editor'; confirmedAt: string }
 export interface HumanVerification { criterionId: Id; inputKey: InputKey; status: 'pass' | 'fail'; actor: 'editor'; verifiedAt: string }
@@ -125,7 +125,7 @@ const draft = obj({ schemaVersion: en(2), id, revision: num, title: id, bodyMark
 const inputKey = obj({ contentHash: str, evidenceRevision: num, taskRevision: num, policyRevision: num });
 const gate = obj({ inputKey, checks: arr(obj({ criterionId: id, status: en('pass', 'fail', 'unknown'), verifier: id, detail: str })), blockers: arr(str) });
 const issue = obj({ id, category: en('unsupported_claim', 'scope', 'privacy', 'permission', 'workflow_leak', 'constraint', 'style'), severity: en('blocking', 'advisory'), relatedIds: ids, span: opt(obj({ blockId: id, start: num, end: num })), detail: str });
-const review = obj({ inputKey, issues: arr(issue), blocking: arr(str), notes: arr(note) });
+const review = obj({ inputKey, issues: arr(issue), blocking: arr(str), notes: arr(note), criterionChecks: opt(arr(obj({ criterionId: id, status: en('pass', 'fail', 'unknown'), verifier: id, detail: str }))) });
 const layout = obj({ contentHash: id, themeId: id, themeVersion: id, html: id, htmlHash: id });
 const confirmation = obj({ inputKey, htmlHash: id, actor: en('editor'), confirmedAt: id });
 const human = obj({ criterionId: id, inputKey, status: en('pass', 'fail'), actor: en('editor'), verifiedAt: id });
