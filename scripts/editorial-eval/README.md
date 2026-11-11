@@ -32,17 +32,20 @@ FOEFLOW_UI_URL=http://127.0.0.1:5189/foeflow/ npm run test:editorial-ui
 Acceptance-only real commands (after secure environment setup and independent freeze/review of any operator recipe):
 
 ```sh
+# Independently approve/pin this protocol for the exact selected frozen file.
+PROTOCOL=/absolute/path/to/independently-approved-protocol.json
+PROTOCOL_SHA="<independently-approved-protocol-bytes-SHA256>"
 # Old-effect acceptance: 4 cases × 3 trials; H requires explicit acceptance mode.
-npm run editorial:eval -- --real --allow-acceptance --cases "$CASES" --sha256 "$SHA" --select 'D02,D04,H04,H05' --trials 3 --recipe /absolute/path/to/frozen-operator-recipes.json
+npm run editorial:eval -- --real --allow-acceptance --cases "$CASES" --sha256 "$SHA" --select 'D02,D04,H04,H05' --trials 3 --recipe /absolute/path/to/frozen-operator-recipes.json --protocol "$PROTOCOL" --protocol-sha256 "$PROTOCOL_SHA"
 # Known failures: 9 × 3.
-npm run editorial:eval -- --real --cases "$CASES" --sha256 "$SHA" --select 'F*' --trials 3 --recipe /absolute/path/to/frozen-operator-recipes.json
+npm run editorial:eval -- --real --allow-acceptance --cases "$CASES" --sha256 "$SHA" --select 'F*' --trials 3 --recipe /absolute/path/to/frozen-operator-recipes.json --protocol "$PROTOCOL" --protocol-sha256 "$PROTOCOL_SHA"
 # Exposed historical audit set, NOT unseen generalization: 16 × 3.
-npm run editorial:eval -- --real --allow-acceptance --cases "$CASES" --sha256 "$SHA" --select 'H09,H10,H11,H12,H13,H14,H15,H16,H17,H18,H19,H20,H21,H22,H23,H24' --trials 3 --recipe /absolute/path/to/frozen-operator-recipes.json
+npm run editorial:eval -- --real --allow-acceptance --cases "$CASES" --sha256 "$SHA" --select 'H09,H10,H11,H12,H13,H14,H15,H16,H17,H18,H19,H20,H21,H22,H23,H24' --trials 3 --recipe /absolute/path/to/frozen-operator-recipes.json --protocol "$PROTOCOL" --protocol-sha256 "$PROTOCOL_SHA"
 # Arbitrary independently frozen acceptance JSONL (including a future blind set):
-npm run editorial:eval -- --real --allow-acceptance --cases /absolute/path/to/frozen.jsonl --sha256 "$FROZEN_SHA" --trials 3 --recipe /absolute/path/to/frozen-operator-recipes.json
+npm run editorial:eval -- --real --allow-acceptance --cases /absolute/path/to/frozen.jsonl --sha256 "$FROZEN_SHA" --trials 3 --recipe /absolute/path/to/frozen-operator-recipes.json --protocol "$PROTOCOL" --protocol-sha256 "$PROTOCOL_SHA"
 ```
 
-Cases without conditional followups/operator actions do not need a recipe. A real run with natural-language `operator_events`, conditional followups, or null initial state **stops before any paid call unless an explicit recipe supplies the editor actions/initial state**. This is intentional: the harness does not guess that a condition fired, auto-confirm, grant a waiver, or clear human-pending based on prose. Acceptance must freeze this translation before model runs. Dry-run lists affected IDs. `setup`, original operator scripts, oracle, provenance and case/fixture IDs never become model input; only editor message text, selected material titles/text, and typed product state do.
+The protocol must be separately approved and bound to the exact case file; when changing to an arbitrary frozen file, update both protocol path/hash and the case SHA. Cases without conditional followups/operator actions do not need a recipe or protocol. A real run with natural-language `operator_events`, conditional followups, or null initial state **stops before any paid call unless an explicit recipe supplies the editor actions/initial state**. This is intentional: the harness does not guess that a condition fired, auto-confirm, grant a waiver, or clear human-pending based on prose. Acceptance must freeze this translation before model runs. Dry-run lists affected IDs. `setup`, original operator scripts, oracle, provenance and case/fixture IDs never become model input; only editor message text, selected material titles/text, and typed product state do.
 
 ## Recipe and assertions
 
@@ -84,6 +87,7 @@ Recipe entries keep `responses`, `assertions`, and `actions`; any other top-leve
 - `followup.index` is zero-based in the **original frozen** `input.followups`; action must be exactly that message. A new message is not a substitute for an unrelated followup.
 - `operator.index` is zero-based in original `operator_events`. It must already be structured as `{ "kind":"editor_action", "action":{...} }`; recipe payload must equal the frozen action. Stage-response objects are not editor actions. Natural-language scripts are not auto-interpreted.
 - `protocol.step` must exactly match a separately reviewed protocol step. Recipe assertions cannot grant editorial authority. Reusing a source step twice is rejected.
+- Source objects have exactly `kind,index` (followup/operator; index is a nonnegative safe integer) or exactly `kind,step` (protocol; nonempty string). String indexes, extra source fields and duplicate source references are rejected before dispatch; they cannot alias/replay a frozen step.
 - A non-null original editor message is **always used exactly**; even a protocol cannot replace it.
 
 For historical setup / prose-script translation, acceptance must obtain independent approval of a separate protocol **and its SHA-256** before running. `approvedBy`/`approvalRef` are audit metadata, not self-approval: the trusted CLI operator must verify that the supplied hash is the independently approved version. Do not copy recipe assertions into protocol/editor messages. Protocol format:

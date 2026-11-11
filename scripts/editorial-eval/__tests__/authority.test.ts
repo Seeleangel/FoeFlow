@@ -15,3 +15,8 @@ it('independently approved case-bound historical setup is allowed, wrong case bi
  const historical={...c,input:{...c.input,initial_message:null}};const approval={caseSha256:hashText(stableJson(historical)),kind:'restoration',approvedBy:'independent-editor',approvalRef:'review/protocol-v2',initialSession:createEditorialSession('history'),steps:{}};
  const result=await runCase(historical,{mode:'mock',model:async()=>{throw Error('no model')},runId:'r',trial:1,approvedProtocol:approval} as never);expect(result.error).toBeUndefined();await expect(runCase(c,{mode:'mock',model:async()=>'',runId:'r',trial:1,approvedProtocol:approval} as never)).rejects.toThrow('protocol_case_hash_mismatch');
 });
+
+it.each([{kind:'followup',index:'0'},{kind:'followup',index:0,annotation:'second use'}])('noncanonical source references cannot alias and replay an original editor step: %s',async source=>{
+ const followup='Keep the asset out. Use text only.';const frozen={...c,input:{...c.input,followups:[{after:'editor response',message:followup}]}};const model=vi.fn(async()=>{throw Error('stop')});
+ await expect(runCase(frozen,{mode:'mock',model,runId:'r',trial:1,recipe:{actions:[{type:'message',text:followup,source:{kind:'followup',index:0}},{type:'message',text:followup,source} as never]}})).rejects.toThrow('editor_source_schema');expect(model).not.toHaveBeenCalled();
+});

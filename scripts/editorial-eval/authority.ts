@@ -7,6 +7,11 @@ export function isAction(a:unknown):a is EvalAction {
  if(!a||typeof a!=='object')return false;const x=a as EvalAction;
  return x.type==='message'?typeof x.text==='string':x.type==='waive'?typeof x.sourceRequirementId==='string'&&typeof x.reason==='string':x.type==='verify'?typeof x.criterionId==='string':x.type==='select'?['candidate','committed','legacy'].includes(x.output):x.type==='cancel'?Number.isInteger(x.afterCalls)&&x.afterCalls>0:['confirm','copy','save','word'].includes(x.type);
 }
+function validActionSource(source:ActionSource){
+ if(!source||typeof source!=='object'||Array.isArray(source))return false;
+ const keys=Object.keys(source).sort().join(',');
+ return source.kind==='protocol'?keys==='kind,step'&&typeof source.step==='string'&&source.step.trim().length>0:(source.kind==='operator'||source.kind==='followup')&&keys==='index,kind'&&Number.isSafeInteger(source.index)&&source.index>=0;
+}
 function actionBody(a:EvalAction){const {source,...body}=a;void source;return body;}
 export function operatorAction(event:unknown):EvalAction|undefined {if(event&&typeof event==='object'&&'kind'in event&&event.kind==='editor_action'&&'action'in event&&isAction(event.action))return event.action;}
 export function needsOperator(event:unknown){return !(event&&typeof event==='object'&&'stage'in event&&'response'in event)&&!(typeof event==='string'&&event.startsWith('模拟响应：'));}
@@ -23,7 +28,7 @@ export function executionPlan(c:EvalCase,recipe?:Recipe,approved?:ApprovedCasePr
  if(approved){if(approved.caseSha256!==caseHash(c))throw Error('protocol_case_hash_mismatch');if(!approved.approvedBy?.trim()||!approved.approvalRef?.trim())throw Error('protocol_approval_required');if(approved.initialMessage!==undefined&&c.input.initial_message!==null)throw Error('frozen_initial_message');if(approved.initialSession&&approved.kind==='agent')throw Error('historical_setup_required');if(approved.kind==='restoration'&&(c.input.initial_message!==null||!approved.initialSession))throw Error('restoration_setup_required');}
  if(approved?.bindings)for(const [id,b] of Object.entries(approved.bindings)){if(!approved.steps[id]||!['operator','followup'].includes(b.kind)||!Number.isInteger(b.index)||b.index<0||(b.kind==='operator'?!needsOperator(c.input.operator_events[b.index])||b.index>=c.input.operator_events.length:b.index>=c.input.followups.length))throw Error('protocol_binding');if(b.kind==='followup'&&stableJson(actionBody(approved.steps[id]))!==stableJson({type:'message',text:c.input.followups[b.index].message}))throw Error('unapproved_editor_action');}
  const used=new Set<string>();const actions=(recipe?.actions??[]).map(action=>{
-  const source=action.source;if(!source)throw Error('unbound_editor_action');const key=stableJson(source);if(used.has(key))throw Error('duplicate_editor_step');used.add(key);let expected:EvalAction|undefined;
+  const source=action.source;if(!source)throw Error('unbound_editor_action');if(!validActionSource(source))throw Error('editor_source_schema');const key=stableJson(source);if(used.has(key))throw Error('duplicate_editor_step');used.add(key);let expected:EvalAction|undefined;
   if(source.kind==='followup'){const f=c.input.followups[source.index];if(f)expected={type:'message',text:f.message};}
   else if(source.kind==='operator')expected=operatorAction(c.input.operator_events[source.index]);
   else if(source.kind==='protocol')expected=approved?.steps[source.step];
