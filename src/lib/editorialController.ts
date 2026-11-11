@@ -1,6 +1,6 @@
 import { abortable, throwIfAborted } from './agentRuntime';
 import { parseJsonObject } from './agentValidation';
-import { applyFactPatch } from './editorialFacts';
+import { applyFactPatch, canonicalScopeId } from './editorialFacts';
 import { applyTaskPatch } from './editorialTask';
 import { taskContractValid } from './editorialContract';
 import { deriveGaps, buildQuestion, legacyFieldsToGapIds } from './editorialGaps';
@@ -10,7 +10,7 @@ import { validateAcceptance, sourceRequirementSatisfied, sourceWaiver } from './
 import { applyToolEvents, startEditorialRun } from './editorialState';
 import { loadRequiredSource, readSourceDocument, recordSourceConsumption, SourceSearchCache, localSourcePort, type SourcePort } from './editorialSources';
 import { getAllThemes, getDefaultTheme } from './themeLoader';
-import { DEFAULT_RUN_BUDGET, RunBudgetSchema, ToolActionSchema, ReviewStampSchema, EditorialNoteSchema, hashText, stableJson, sameEntitySet, currentInputKey, sameInputKey, type EditorialSession, type EditorialOutcome, type EditorialToolEvent, type ToolAction, type ToolResult, type RunBudget, type GateReport, type LoadedSource, type EditorialNote } from './editorialTypes';
+import { DEFAULT_RUN_BUDGET, RunBudgetSchema, ToolActionSchema, ReviewStampSchema, EditorialNoteSchema, hashText, stableJson, sameEntitySet, currentInputKey, sameInputKey, type EditorialSession, type EditorialOutcome, type EditorialToolEvent, type ToolAction, type ToolResult, type RunBudget, type GateReport, type LoadedSource, type EditorialNote, type ReviewStamp } from './editorialTypes';
 export type EditorialStage = 'preflight' | 'extract' | 'decide' | 'write' | 'review' | 'repair';
 export type EditorialModelPort = (request: { stage: EditorialStage; data: Record<string, unknown> }, signal: AbortSignal) => Promise<string>;
 export interface ControllerOptions {
@@ -62,12 +62,27 @@ function semanticState(s: EditorialSession) {
     const gap = deriveGaps(s).find(g => g.id === id); return gap ? ['gap',gap.kind,selector(gap.selector)] : id;
   };
   const task = { requirements: sortedSet(s.task.requirements.map(r => [selector(r.selector),r.necessity,r.resolution])), criteria: sortedSet(s.task.criteria.map(c => [rule(c.rule),c.verification,c.severity])), sources: sortedSet(s.task.requiredSources.map(item => [source(item.id),sourceRequirementSatisfied(s,item),sourceWaiver(s,item.id) !== undefined])) };
-  return { sortedSet, selector, claim, subject, check, task, evidence: sortedSet(s.evidence.map(e => [e.kind,e.provenance.documentId,e.contentHash])) };
+  return { sortedSet, selector, claim, subject, check, task };
+}
+/** Discovery is not progress: only task dependencies, executable checks and usable public inputs count. */
+function relevantClaims(s:EditorialSession) {
+ const scopes=new Set([...s.task.targetScopes,...s.task.requirements.map(r=>r.selector.scopeId)].map(id=>canonicalScopeId(s,id)));
+ const ids=new Set(s.task.criteria.flatMap(c=>c.rule.kind==='include_facts'||c.rule.kind==='exclude_claims'?c.rule.factIds:[]));
+ return s.claims.filter(c=>!scopes.size&&!ids.size || scopes.has(canonicalScopeId(s,c.selector.scopeId))||ids.has(c.id));
+}
+function qualityMarks(s:EditorialSession) {
+ const semantic=semanticState(s),good=new Set<string>(),bad=new Set(openGaps(s).map(g=>stableJson([g.kind,semantic.selector(g.selector)])));
+ if(s.candidate)good.add('candidate');
+ if(s.review&&sameInputKey(s.review.inputKey,currentInputKey(s)))good.add('reviewed');
+ if(s.layout&&s.layout.contentHash===s.candidate?.contentHash)good.add('layout');
+ for(const check of canHandoff(s).checks)if(check.status==='pass')good.add(stableJson(['check',semantic.check(check.criterionId)]));
+ for(const c of relevantClaims(s))if(c.visibility==='public'&&c.epistemic==='supported')good.add(stableJson(['claim',semantic.claim(c.id)]));
+ return {good,bad};
 }
 /** Envelope revisions, prose/diagnostic wording, UUIDs and remaining budget are not quality progress. */
 export function qualityFingerprint(s: EditorialSession): string {
   const gate = canHandoff(s), semantic = semanticState(s);
-  return hashText(stableJson({ evidence: semantic.evidence, claims: semantic.sortedSet(s.claims.map(c => semantic.claim(c.id))), permissions: semantic.sortedSet(s.permissions.map(p => [semantic.subject(p.subjectId),p.uses,p.state])), task: semantic.task,
+  return hashText(stableJson({ claims: semantic.sortedSet(relevantClaims(s).map(c => semantic.claim(c.id))), permissions: semantic.sortedSet(s.permissions.map(p => [semantic.subject(p.subjectId),p.uses,p.state])), task: semantic.task,
     gaps: semantic.sortedSet(openGaps(s).map(g => [g.kind,semantic.selector(g.selector)])), candidate: !!s.candidate,
     review: !!s.review && sameInputKey(s.review.inputKey,currentInputKey(s)), blockingReview: !!s.review && (!!s.review.blocking.length || s.review.issues.some(i => i.severity === 'blocking')),
     layout: !!s.layout && s.layout.contentHash === s.candidate?.contentHash, checks: semantic.sortedSet(gate.checks.map(check => [semantic.check(check.criterionId),check.status])),
@@ -97,7 +112,7 @@ export async function runEditorialController(options: ControllerOptions): Promis
   const timer = setTimeout(() => { expired = true; controller.abort(); }, config.maxElapsedMs);
   const signal = controller.signal; const guard = () => { throwIfAborted(signal); if (options.isCurrent && !options.isCurrent()) throw new DOMException('stale_ownership', 'AbortError'); if (now() - started >= config.maxElapsedMs) { expired = true; throw new Error('deadline_exceeded'); } };
   let s = startEditorialRun(options.session, options.runId ?? 'run-' + hashText(options.session.sessionId + ':' + options.session.revision + ':' + started).slice(0,24));
-  const used = { decisions: 0, writes: 0, searches: 0, modelCalls: 0 }; let repairUsed = false; let stalls = 0; let observation = '开始任务预检。'; let lastWriteFailure = '';
+  const used = { decisions: 0, writes: 0, searches: 0, modelCalls: 0 }; let repairUsed = false; let stalls = 0; let observation = '开始任务预检。'; let lastWriteFailure = ''; let repairReview:ReviewStamp|undefined=options.session.review;
   const sources = options.sources ?? localSourcePort; const cache = new SourceSearchCache(sources); const attemptedRequired = new Set<string>(); const writeKeys = new Set<string>(); const contentHistory = new Set(s.candidate ? [s.candidate.contentHash] : []); const fingerprints = new Set<string>();
   const remaining = (): RunBudget => ({ ...config, decisions: config.decisions - used.decisions, writes: config.writes - used.writes, searches: config.searches - used.searches, modelCalls: config.modelCalls - used.modelCalls });
   const emit = (payloads: Payload[]) => {
@@ -172,7 +187,7 @@ export async function runEditorialController(options: ControllerOptions): Promis
     }
     const notes: EditorialNote[] = lines(raw.notes).map(text => ({ id: 'review-note-' + hashText(text).slice(0,24), kind: 'advisory', text, relatedIds: [] }));
     const stamp = ReviewStampSchema.parse({ inputKey: currentInputKey(s), blocking: lines(raw.blocking), notes, issues: raw.issues ?? [], ...(raw.criterionChecks ? { criterionChecks: raw.criterionChecks } : {}) });
-    emit([{ type: 'review_recorded', review: stamp }]); toolResult('review', 'progress', 'review_recorded');
+    repairReview=stamp; emit([{ type: 'review_recorded', review: stamp }]); toolResult('review', 'progress', 'review_recorded');
     if (!stamp.blocking.length && !stamp.issues.some(issue => issue.severity === 'blocking')) layout();
   };
   try {
@@ -181,7 +196,7 @@ export async function runEditorialController(options: ControllerOptions): Promis
     applyExtraction(await json('preflight', { task: s.task, evidence: s.evidence, scopes: s.scopes, claims: s.claims, permissions: s.permissions, template: options.template }));
     if (!taskContractValid(s)) return stop('task_plan_incomplete');
     for (const source of s.task.requiredSources) if (!sourceWaiver(s, source.id)) await performRead(source.id);
-    updateGaps(); fingerprints.add(qualityFingerprint(s));
+    updateGaps(); fingerprints.add(qualityFingerprint(s)); let previousQuality=qualityMarks(s);
     while (used.decisions < config.decisions) {
       guard(); const done = finish(); if (done) return done;
       const raw = await json('decide', { task: s.task, gaps: s.gaps, claims: s.claims, permissions: s.permissions, draft: s.candidate, review: s.review, layoutReady: !!s.layout, sources: cache.discovered(), allowedActions: allowedActions(s, remaining()), observation, remaining: remaining(), programGate: canHandoff(s) }); used.decisions++;
@@ -206,29 +221,33 @@ export async function runEditorialController(options: ControllerOptions): Promis
         toolResult('ask', 'rejected', 'no_selected_gap');
       } else if (action.tool === 'write') {
         const repairs = s.candidate ? canHandoff(s).blockers.filter(id => !['candidate','review_current','layout_current'].includes(id)).sort() : lastWriteFailure ? [lastWriteFailure] : [];
-        if (s.review?.blocking.length) repairs.push('review:blocking');
-        for (const issue of s.review?.issues ?? []) if (issue.severity === 'blocking') repairs.push('review:' + issue.category + ':' + [...issue.relatedIds].sort().join(','));
+        const feedback=s.review??repairReview;
+        if (feedback?.blocking.length) repairs.push('review:blocking');
+        for (const issue of feedback?.issues ?? []) if (issue.severity === 'blocking') repairs.push('review:' + issue.category + ':' + [...issue.relatedIds].sort().join(','));
         const semantic = semanticState(s);
-        const key = hashText(stableJson({ evidence: semantic.evidence, task: semantic.task, repairs: semantic.sortedSet(repairs.map(semantic.check)) }));
+        const key = hashText(stableJson({ claims:semantic.sortedSet(relevantClaims(s).map(c=>semantic.claim(c.id))), task: semantic.task, repairs: semantic.sortedSet(repairs.map(semantic.check)) }));
         if (!allowedActions(s, remaining()).includes('write')) {
           toolResult('write', 'rejected', used.writes >= config.writes ? 'write_budget_exhausted' : 'blocking_gaps');
           if (s.candidate && used.writes >= config.writes) { await review(); const ready = finish(); return ready ?? stop('write_budget_exhausted'); }
         } else if (writeKeys.has(key)) {
           toolResult('write', 'no_progress', 'write_idempotency_hit'); if (s.candidate && !s.review) { await review(); const ready = finish(); if (ready) return ready; }
         } else {
-          writeKeys.add(key); used.writes++; const rawDraft = await ask('write', buildWriterContext(s, repairs, {instructions:action.instructions,invalidArtifact:!!lastWriteFailure}) as unknown as Record<string, unknown>);
+          writeKeys.add(key); used.writes++; const rawDraft = await ask('write', buildWriterContext({...s,review:feedback}, repairs, {instructions:action.instructions,invalidArtifact:!!lastWriteFailure}) as unknown as Record<string, unknown>);
           let parsed = parseDraftArtifact(rawDraft, { id: 'candidate', revision: (s.candidate?.revision ?? 0) + 1 });
           if (!parsed.artifact && !repairUsed && /^[{`]/.test(rawDraft.trim())) { try { parseJsonObject(rawDraft); } catch { repairUsed = true; parsed = parseDraftArtifact(await ask('repair', { stage: 'write', invalidResponse: rawDraft }), { id: 'candidate', revision: (s.candidate?.revision ?? 0) + 1 }); } }
           // A fresh model response is fresh provenance, including the supported Markdown wire format.
           if(parsed.artifact) parsed.artifact.origin='model';
           if (!parsed.artifact) { lastWriteFailure = 'invalid_artifact'; toolResult('write', 'rejected', 'invalid_artifact'); }
           else if (contentHistory.has(parsed.artifact.contentHash) && s.candidate?.origin !== 'legacy') { if (parsed.artifact.editorialNotes.length) emit([{ type: 'notes_recorded', notes: parsed.artifact.editorialNotes }]); toolResult('write', 'no_progress', 'content_cycle'); }
-          else { lastWriteFailure = ''; contentHistory.add(parsed.artifact.contentHash); emit([{ type: 'candidate_updated', artifact: parsed.artifact }]); toolResult('write', 'progress', 'candidate_updated'); }
+          else { lastWriteFailure = ''; repairReview=undefined; contentHistory.add(parsed.artifact.contentHash); emit([{ type: 'candidate_updated', artifact: parsed.artifact }]); toolResult('write', 'progress', 'candidate_updated'); }
         }
       } else if (action.tool === 'review') await review();
       else if (action.tool === 'layout') layout(action.themeId);
       else { const ready = finish(); if (ready) return ready; toolResult('submit', 'rejected', 'delivery_gate_blocked'); }
-      updateGaps(); const fingerprint = qualityFingerprint(s); if (fingerprints.has(fingerprint)) stalls++; else { fingerprints.add(fingerprint); stalls = 0; }
+      updateGaps(); const fingerprint = qualityFingerprint(s),quality=qualityMarks(s);
+      const improved=[...quality.good].some(mark=>!previousQuality.good.has(mark))||[...previousQuality.bad].some(mark=>!quality.bad.has(mark));
+      if (fingerprints.has(fingerprint)||!improved) stalls++; else stalls=0;
+      fingerprints.add(fingerprint);previousQuality=quality;
       const ready = finish(); if (ready) return ready;
       if (stalls >= Math.max(1, config.maxNoProgress)) { if (s.candidate && !s.review) { await review(); const ready = finish(); if (ready) return ready; } return stop('no_progress'); }
     }
