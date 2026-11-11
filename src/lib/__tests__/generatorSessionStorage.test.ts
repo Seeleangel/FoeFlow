@@ -8,8 +8,8 @@ const state=():GeneratorSessionState=>({messages:[],chatInput:'',generatedText:'
 beforeEach(()=>{vi.clearAllMocks()});
 it('uses one conditional SQL write with expected persisted bytes/revision; CAS conflict rejects',async()=>{
  const s=state(), old=JSON.stringify(s); db.select.mockResolvedValue([{id:'s',params_json:old}]);db.execute.mockResolvedValue({rowsAffected:0}); const e=s.editorialSession!; const next=applyControlEvent(e,{type:'editor_confirmed',sessionId:'s',runId:'r',expectedRevision:e.revision,confirmation:{actor:'editor',confirmedAt:'now',inputKey:currentInputKey(e),htmlHash:e.layout!.htmlHash}});
- await expect(compareAndSaveEditorialSession('s',s,next,3)).rejects.toThrow('stale'); expect(db.execute.mock.calls[0][0]).toContain('AND params_json = ?'); expect(db.execute.mock.calls[0][1]).toContain(old);
- db.select.mockResolvedValue([{id:'s',params_json:JSON.stringify({...s,editorialSession:{...e,revision:4}})}]); await expect(compareAndSaveEditorialSession('s',s,next,3)).rejects.toThrow('stale');
+ await expect(compareAndSaveEditorialSession('s',s,next,3,{sessionId:'s',paramsJson:old})).rejects.toThrow('stale'); expect(db.execute.mock.calls[0][0]).toContain('AND params_json = ?'); expect(db.execute.mock.calls[0][1]).toContain(old);
+ db.select.mockResolvedValue([{id:'s',params_json:JSON.stringify({...s,editorialSession:{...e,revision:4}})}]); await expect(compareAndSaveEditorialSession('s',s,next,3,{sessionId:'s',paramsJson:JSON.stringify({...s,editorialSession:{...e,revision:4}})})).rejects.toThrow('stale');
 });
 it('checkpoint autosave cannot overwrite a newer confirmed revision',async()=>{const s=state();db.select.mockResolvedValue([{params_json:JSON.stringify({...s,editorialSession:{...uiReady(),revision:4}})}]); await expect(saveGeneratorSession('s',s)).rejects.toThrow('stale');expect(db.execute).not.toHaveBeenCalled()});
 it('loads v2 even without HTML, and migrates historical layout/confirmation idempotently',async()=>{

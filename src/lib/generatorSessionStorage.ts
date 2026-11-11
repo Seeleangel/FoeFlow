@@ -3,7 +3,9 @@ import { EditorialSessionSchema, stableJson, type EditorialSession } from './edi
 import { normalizeLegacySession } from './editorialCompatibility';
 import type { EditorialHandoff } from './editorialAgent';
 
+export interface PersistedSessionBase {sessionId:string;paramsJson:string|null}
 export interface GeneratorSessionState {
+  persistenceGeneration?:string;
   messages: Array<{
     role: 'user' | 'assistant';
     content: string;
@@ -25,6 +27,7 @@ export interface GeneratorSessionState {
 
 export interface GeneratorSession {
   id: string;
+  persistedBase: PersistedSessionBase;
   title: string;
   state: GeneratorSessionState;
   createdAt: number;
@@ -42,7 +45,7 @@ interface GeneratorSessionRow {
 }
 
 function stateToRow(sessionId: string, state: GeneratorSessionState): GeneratorSessionRow {
-  const paramsJson = JSON.stringify(state);
+  const paramsJson = JSON.stringify({...state,persistenceGeneration:crypto.randomUUID()});
   return {
     id: sessionId,
     template_id: state.selectedTemplateId,
@@ -73,6 +76,7 @@ function rowToSession(row: GeneratorSessionRow): GeneratorSession {
   }
   return {
     id: row.id,
+    persistedBase:{sessionId:row.id,paramsJson:row.params_json},
     title: (parsed.generatedTitle as string) || '未命名生成',
     state: {
       messages: (parsed.messages as GeneratorSessionState['messages']) || [],
@@ -98,37 +102,30 @@ function isValidSession(session: GeneratorSession): boolean {
   return !!session.state.editorialSession || session.state.messages.length > 0 || session.state.generatedText.length > 0;
 }
 
-export async function saveGeneratorSession(
-  sessionId: string,
-  state: GeneratorSessionState
-): Promise<void> {
-  const db = await getDb();
-  const row = stateToRow(sessionId, state);
-  const rows = await db.select<GeneratorSessionRow[]>('SELECT * FROM generated_drafts WHERE id = ? AND mode = ?', [sessionId, 'generator-session']);
-  if (rows.length) {
-    const previous = JSON.parse(rows[0].params_json || '{}') as GeneratorSessionState;
-    const old = previous.editorialSession, next = state.editorialSession;
-    if (old && (!next || next.sessionId !== sessionId || next.revision < old.revision || next.revision === old.revision && stableJson(next) !== stableJson(old))) throw new Error('stale_persistence');
-    const result = await db.execute('UPDATE generated_drafts SET template_id = ?, params_json = ?, content_html = ?, content_text = ?, created_at = ? WHERE id = ? AND mode = ? AND params_json = ?', [row.template_id,row.params_json,row.content_html,row.content_text,row.created_at,sessionId,'generator-session',rows[0].params_json]);
-    assertWritten(result);
-  } else {
-    const result = await db.execute(`INSERT OR IGNORE INTO generated_drafts (id, template_id, mode, params_json, content_html, content_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, [row.id,row.template_id,row.mode,row.params_json,row.content_html,row.content_text,row.created_at]);
-    assertWritten(result);
-  }
+/** Expected bytes are supplied by the producing UI owner, never refreshed from a foreign branch. */
+export async function saveGeneratorSession(sessionId:string,state:GeneratorSessionState,expected?:PersistedSessionBase):Promise<PersistedSessionBase> {
+ const db=await getDb(),row=stateToRow(sessionId,state);
+ if(expected&&expected.sessionId!==sessionId)throw Error('stale_persistence');
+ if(expected?.paramsJson){
+  const previous=JSON.parse(expected.paramsJson) as GeneratorSessionState;const old=previous.editorialSession,next=state.editorialSession;
+  if(next&&next.sessionId!==sessionId||old&&(!next||next.revision<old.revision||next.revision===old.revision&&stableJson(next)!==stableJson(old)))throw Error('stale_persistence');
+  assertWritten(await db.execute('UPDATE generated_drafts SET template_id = ?, params_json = ?, content_html = ?, content_text = ?, created_at = ? WHERE id = ? AND mode = ? AND params_json = ?',[row.template_id,row.params_json,row.content_html,row.content_text,row.created_at,sessionId,'generator-session',expected.paramsJson]));
+ }else{
+  // Compatibility permits first insert without a token, never an existing-row overwrite.
+  if(!expected){const rows=await db.select<GeneratorSessionRow[]>('SELECT * FROM generated_drafts WHERE id = ? AND mode = ?',[sessionId,'generator-session']);if(rows.length)throw Error('stale_persistence');}
+  assertWritten(await db.execute('INSERT OR IGNORE INTO generated_drafts (id, template_id, mode, params_json, content_html, content_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',[row.id,row.template_id,row.mode,row.params_json,row.content_html,row.content_text,row.created_at]));
+ }
+ return {sessionId,paramsJson:row.params_json};
 }
-function assertWritten(result: unknown) {
- if (!result || typeof result !== 'object' || !('rowsAffected' in result) || result.rowsAffected !== 1) throw new Error('stale_persistence');
-}
-/** A single SQL CAS covers both native SQLite and the web IndexedDB transaction. No read/replace race. */
-export async function compareAndSaveEditorialSession(sessionId: string, state: GeneratorSessionState, next: EditorialSession, expectedRevision: number): Promise<void> {
+function assertWritten(result:unknown){if(!result||typeof result!=='object'||!('rowsAffected'in result)||result.rowsAffected!==1)throw Error('stale_persistence');}
+export async function compareAndSaveEditorialSession(sessionId:string,state:GeneratorSessionState,next:EditorialSession,expectedRevision:number,expected?:PersistedSessionBase):Promise<PersistedSessionBase>{
  EditorialSessionSchema.parse(next);
- if (next.sessionId !== sessionId || next.revision !== expectedRevision + 1) throw new Error('stale_persistence');
- const db=await getDb(); const rows=await db.select<GeneratorSessionRow[]>('SELECT * FROM generated_drafts WHERE id = ? AND mode = ?', [sessionId,'generator-session']);
- const old=rows[0]; if (!old) throw new Error('stale_persistence');
- const previous=JSON.parse(old.params_json || '{}') as GeneratorSessionState;
- if (previous.editorialSession?.sessionId !== sessionId || previous.editorialSession.revision !== expectedRevision || stableJson(previous.editorialSession) !== stableJson(state.editorialSession)) throw new Error('stale_persistence');
- const row=stateToRow(sessionId,{...state,editorialSession:next,editorial:{status:'confirmed',notes:state.editorial?.notes ?? [],sources:state.editorial?.sources ?? []}});
- assertWritten(await db.execute('UPDATE generated_drafts SET params_json = ?, content_html = ?, content_text = ? WHERE id = ? AND mode = ? AND params_json = ?', [row.params_json,row.content_html,row.content_text,sessionId,'generator-session',old.params_json]));
+ if(next.sessionId!==sessionId||next.revision!==expectedRevision+1||!expected?.paramsJson||expected.sessionId!==sessionId)throw Error('stale_persistence');
+ const previous=JSON.parse(expected.paramsJson) as GeneratorSessionState;
+ if(previous.editorialSession?.sessionId!==sessionId||previous.editorialSession.revision!==expectedRevision||stableJson(previous.editorialSession)!==stableJson(state.editorialSession))throw Error('stale_persistence');
+ const row=stateToRow(sessionId,{...state,editorialSession:next,editorial:{status:'confirmed',notes:state.editorial?.notes??[],sources:state.editorial?.sources??[]}}),db=await getDb();
+ assertWritten(await db.execute('UPDATE generated_drafts SET params_json = ?, content_html = ?, content_text = ? WHERE id = ? AND mode = ? AND params_json = ?',[row.params_json,row.content_html,row.content_text,sessionId,'generator-session',expected.paramsJson]));
+ return {sessionId,paramsJson:row.params_json};
 }
 
 export async function loadGeneratorSession(sessionId: string): Promise<GeneratorSession | null> {

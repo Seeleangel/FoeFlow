@@ -1,3 +1,4 @@
+import { createSessionPersistence } from '@/lib/generatorSessionPersistence';
 import { applyEditorVerification } from '@/lib/editorialControls';
 import { isWebApp } from '@/lib/platform';
 import { safeArticleHtml } from '@/lib/safeArticleHtml';
@@ -31,13 +32,11 @@ import { showToast } from '@/components/ui/toaster';
 import ChatPanel from '@/components/generator/ChatPanel';
 import PreviewPanel from '@/components/generator/PreviewPanel';
 import {
-  saveGeneratorSession,
-  compareAndSaveEditorialSession,
   loadGeneratorSession,
   deleteGeneratorSession,
   getAllGeneratorSessions,
 } from '@/lib/generatorSessionStorage';
-import type { GeneratorSessionState } from '@/lib/generatorSessionStorage';
+import type { GeneratorSessionState, PersistedSessionBase } from '@/lib/generatorSessionStorage';
 import type { StyleTemplate } from '@/types';
 import type { LayoutStrategy, LayoutDirection } from '@/types/layout';
 
@@ -142,6 +141,10 @@ export default function Generator() {
   const [session, setSession] = useState<string>(`generator_${Date.now()}`);
   const editorialState = useEditorialSession(session);
   const editorialSession = editorialState.session;
+  const [persistenceConflict,setPersistenceConflict]=useState(false);
+  const makePersistence=(id:string,base?:PersistedSessionBase)=>createSessionPersistence(id,base,()=>{setPersistenceConflict(true);cancelChatRun();setLoading(false);});
+  const persistenceRef=useRef<ReturnType<typeof createSessionPersistence>|null>(null);
+  if(!persistenceRef.current)persistenceRef.current=makePersistence(session);
   const loadSessionOnMount=useRef<((id:string)=>Promise<void>)|undefined>(undefined);
   const [showHistory, setShowHistory] = useState(false);
   const sessionRef = useRef(session);
@@ -214,7 +217,7 @@ export default function Generator() {
   }); }, [chatMessages, chatInput, generatedText, generatedHtml, generatedTitle, layoutHtml, layoutStrategy, styleSpec, selectedDirection, selectedId, editorial, editorialSession, creationMode]);
 
   const flushSave = async () => {
-    if (snapshot.messages.length || snapshot.generatedText || snapshot.editorialSession) await saveGeneratorSession(sessionRef.current, snapshot).catch(console.error);
+    if (snapshot.messages.length || snapshot.generatedText || snapshot.editorialSession) await persistenceRef.current!.save(snapshot);
   };
 
   const stopAllTasks = () => {
@@ -231,6 +234,7 @@ export default function Generator() {
       setChatError(null);
       await flushSave();
       const newId = `generator_${Date.now()}`;
+      persistenceRef.current=makePersistence(newId);setPersistenceConflict(false);
       setSession(newId);
       setChatMessages([]);
       setChatInput('');
@@ -245,25 +249,26 @@ export default function Generator() {
       setLayoutFeedbackState('idle');
       cancelArticlePipeline();
       setShowHistory(false);
-    } finally {
+    } catch { showToast('会话未保存，本地候选仍保留；请处理版本冲突或重试。','error'); } finally {
       sessionChanging.current = false;
     }
   };
 
-  const handleLoadSession = async (sessionId: string) => {
+  const handleLoadSession = async (sessionId: string, discardLocal=false) => {
     if (confirmationInFlight.current || sessionChanging.current) return;
-    if (sessionId === sessionRef.current) {
+    if (sessionId === sessionRef.current && !discardLocal) {
       setShowHistory(false);
       return;
     }
     sessionChanging.current = true;
     try {
       stopAllTasks();
-      await flushSave();
+      if(!discardLocal)await flushSave();
       const loaded = await loadGeneratorSession(sessionId);
       if (loaded) {
         lastUserInputRef.current = '';
         setChatError(null);
+        persistenceRef.current=makePersistence(sessionId,loaded.persistedBase);setPersistenceConflict(false);
         setSession(sessionId);
         setChatMessages(
           loaded.state.messages.map((m) => ({ ...m, timestamp: new Date(m.timestamp), isHistorical: true }))
@@ -295,7 +300,7 @@ export default function Generator() {
         }
       }
       setShowHistory(false);
-    } finally {
+    } catch { showToast('会话未保存，本地候选仍保留；请处理版本冲突或重试。','error'); } finally {
       sessionChanging.current = false;
     }
   };
@@ -430,8 +435,8 @@ export default function Generator() {
           const messageId = 'message-' + (retrying ? latestMessage.timestamp : newUserMessage.timestamp).getTime() + '-' + newMessages.length;
           editorialState.appendMessage(text, messageId);
           const owner = editorialState.begin();
-          const targetSession = sessionRef.current;
-          const isCurrent = () => chatRun.isCurrent() && owner.isCurrent() && sessionRef.current === targetSession;
+          const targetSession = sessionRef.current,writer=persistenceRef.current!;
+          const isCurrent = () => chatRun.isCurrent() && owner.isCurrent() && persistenceRef.current===writer && !writer.hasConflict() && sessionRef.current === targetSession;
           const result = await runEditorialAgent({
             session: owner.session, runId: owner.runId,
             template: { name: selectedTemplate.name, structureJson: selectedTemplate.structureJson },
@@ -526,9 +531,10 @@ export default function Generator() {
 
   useEffect(() => {
     if (!snapshot.messages.length && !snapshot.generatedText && !snapshot.editorialSession) return;
+    const writer=persistenceRef.current!;
     const timer = setTimeout(() => {
       if (confirmationInFlight.current) return;
-      saveGeneratorSession(session, snapshot)
+      writer.save(snapshot)
         .then(() => setSessions(prev => [
           { id: session, title: snapshot.generatedTitle || '未命名生成', updatedAt: Date.now() },
           ...prev.filter(item => item.id !== session),
@@ -544,7 +550,7 @@ export default function Generator() {
   useEffect(() => () => {
     const latest = flushRef.current;
     if (!confirmationInFlight.current && (latest.messages.length || latest.generatedText)) {
-      saveGeneratorSession(sessionRef.current, latest).catch(console.error);
+      persistenceRef.current!.save(latest).catch(console.error);
     }
   }, []);
 
@@ -688,22 +694,23 @@ export default function Generator() {
   };
 
   const confirmFinal = async () => {
-    if (!editorialSession || editorialSession.phase !== 'pending_confirmation' || loading || sessionChanging.current || confirmationInFlight.current) return;
+    if (persistenceConflict || !editorialSession || editorialSession.phase !== 'pending_confirmation' || loading || sessionChanging.current || confirmationInFlight.current) return;
     confirmationInFlight.current = true; setConfirming(true);
     const target = session;
     try {
       // Flush the pending checkpoint first; CAS then binds the exact persisted revision.
-      await saveGeneratorSession(target,snapshot);
-      const applied=await editorialState.confirm(async(next,expected)=>compareAndSaveEditorialSession(target,snapshot,next,expected));
+      const writer=persistenceRef.current!;if(writer.sessionId!==target)throw Error('stale_persistence');
+      await writer.save(snapshot);
+      const applied=await editorialState.confirm(async(next,expected)=>{await writer.confirm(snapshot,next,expected);});
       if (applied) { flushRef.current={...snapshot,editorialSession:editorialState.getCurrent()}; setEditorial({status:'confirmed',notes:[],sources:[]}); showToast('已确认成稿','success'); }
     } catch { showToast('成稿确认未保存或版本已变化，请重试。','error'); }
     finally { confirmationInFlight.current=false; setConfirming(false); }
   };
   let outputLocked=creationMode==='agent' || !!editorial || !!editorialSession;
   if (editorialSession) { try { requireConfirmedOutput(editorialSession); outputLocked=false; } catch { /* locked */ } }
-  outputLocked=outputLocked || loading || confirming;
+  outputLocked=outputLocked || loading || confirming || persistenceConflict;
   let canConfirm=false;
-  if (editorialSession?.phase==='pending_confirmation' && !loading && !confirming) { try { assertConfirmable(editorialSession); canConfirm=true; } catch { /* specific blockers in sidebar */ } }
+  if (editorialSession?.phase==='pending_confirmation' && !loading && !confirming && !persistenceConflict) { try { assertConfirmable(editorialSession); canConfirm=true; } catch { /* specific blockers in sidebar */ } }
   // Legacy fields are only a read-only view of the chosen public version for agent sessions.
   const previewHtml=agentView?.contentHtml ?? generatedHtml, previewLayout=agentView?.contentHtml ?? layoutHtml, previewText=agentView?.contentText ?? generatedText, previewTitle=agentView?.title ?? generatedTitle;
 
@@ -796,6 +803,7 @@ export default function Generator() {
         </div>
       </div>
 
+      {persistenceConflict && <div role="alert" className="px-8 text-red-700">保存版本冲突：本地候选仍保留，未覆盖其它编辑的权限或任务决定。<button onClick={()=>void handleLoadSession(session,true)}>放弃本地候选并重新加载最新会话</button></div>}
       {/* 主内容区域 */}
       <div className={`max-w-5xl w-full mx-auto pb-6 ${isWebApp ? 'px-5 sm:px-8 lg:flex-1 lg:min-h-0 lg:overflow-hidden' : 'min-h-0 flex-1 overflow-hidden px-8'}`}>
         {selectedTemplate && (
