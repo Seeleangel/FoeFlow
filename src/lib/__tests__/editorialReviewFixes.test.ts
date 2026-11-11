@@ -1,4 +1,7 @@
 import { seedTestTask } from './editorialTestFixtures';
+import { applyControlEvent } from '../editorialState';
+import { projectPublicArtifact } from '../editorialDocument';
+import { requireConfirmedOutput } from '../editorialOutput';
 import { currentInputKey } from '../editorialState';
 import { describe, it, expect } from 'vitest';
 import { createEditorialSession, hashText, type EvidenceRef, type PermissionUse } from '../editorialTypes';
@@ -106,4 +109,35 @@ describe('review-fix integration controls', () => {
     const { s, ref } = setup(); const selector = { scopeId: 'Beta', predicate, cardinality: 'set' as const, cardinalityRefs: [ref('Beta')] };
     s.claims = [{ ...s.claims[0], selector }, { ...s.claims[0], id: 'other', selector, value: 'INTERNAL-STATE', refs: [ref('INTERNAL-STATE')] }]; s.task.targetScopes = ['Beta']; expect(deriveGaps(s).some(g => g.kind === 'conflict')).toBe(false);
   });
+});
+
+describe('review trust-boundary end-to-end negative and positive controls', () => {
+  it('B2 explicit new editor evidence permits regrant, but subject/use history stays immutable', () => {
+    const { s,ref } = setup(), denied = { id: 'deny', subjectId: 'Beta', uses: [use], state: 'denied' as const, refs: [ref('Beta')] }; s.permissions = [{ ...denied,id: 'allow',state: 'allowed' },denied];
+    const text = 'Editor now grants Beta publication permission'; const basis = { evidenceId: 'grant',revision: 1,start: 0,end: text.length,quote: text }; s.evidence.push({ ...s.evidence[0],id: 'grant',text,contentHash: hashText(text) });
+    const granted = applyEditorFactPatch(s,{ permissions: [{ ...denied,state: 'allowed',refs: [basis] }] }); expect(permissionAllows(granted,'Beta',use)).toBe(true);
+    expect(applyEditorFactPatch(s,{ permissions: [{ ...denied,subjectId: 'Alpha',refs: [basis] }] }).permissions.find(p => p.id === 'deny')?.subjectId).toBe('Beta');
+  });
+  it('B4 cross-source transitive aliases inherit both allow and deny independent of alignment order', () => {
+    const { s,ref } = setup(); const text = 'Beta identity from another source'; s.evidence.push({ ...s.evidence[0],id: 'other',kind: 'library',text,contentHash: hashText(text),provenance: { documentId: 'other-document' } });
+    const beta = { evidenceId: 'other',revision: 1,start: 0,end: 4,quote: 'Beta' }; s.scopes.find(scope => scope.id === 'Beta')!.anchors = [beta]; s.alignments = [{ leftId: 'Alpha',rightId: 'Beta',refs: [ref('Alpha'),beta] },{ leftId: 'Beta',rightId: 'Gamma',refs: [beta,ref('Gamma')] }];
+    s.permissions = [{ id: 'allow',subjectId: 'Alpha',uses: [use],state: 'allowed',refs: [ref('Alpha')] }]; expect(permissionAllows(s,'Gamma',use)).toBe(true);
+    s.permissions.push({ id: 'deny',subjectId: 'Beta',uses: [use],state: 'denied',refs: [beta] }); expect(permissionAllows(s,'Gamma',use)).toBe(false); s.alignments.reverse(); s.scopes.reverse(); expect(permissionAllows(s,'Gamma',use)).toBe(false);
+  });
+  it('B3 a forged clean gate cannot confirm or unlock a note-bearing caption or hidden HTML payload', () => {
+    const { s,ref } = setup(); let active = startEditorialRun(s,'r'); seedTestTask(active); active.permissions = [{ id: 'asset',subjectId: 'Alpha',uses: [{ ...use,purpose: 'illustration' }],state: 'allowed',refs: [ref('Alpha')] }];
+    active.candidate = parseDraftArtifact(JSON.stringify({ title: 'Title',bodyMarkdown: 'Body\n{{asset:slot}}',assets: [{ assetId: 'Alpha',slotId: 'slot',use: 'illustration',state: 'included',publicCaption: 'INTERNAL-STATE' }],editorialNotes: [{ id: 'note',kind: 'process',text: 'INTERNAL-STATE',relatedIds: [] }] }),{ id: 'candidate',revision: 1 }).artifact!;
+    const assertLocked = () => { const key = currentInputKey(active); active.review = { inputKey: key,issues: [],blocking: [],notes: [] }; active.gate = { inputKey: key,checks: [{ criterionId: 'fake',status: 'pass',verifier: 'model',detail: '' }],blockers: [] }; expect(() => applyControlEvent(active,{ sessionId: active.sessionId,runId: active.activeRunId!,expectedRevision: active.revision,type: 'editor_confirmed',confirmation: { inputKey: key,htmlHash: active.layout!.htmlHash,actor: 'editor',confirmedAt: 'now' } })).toThrow('confirmation_blocked'); expect(() => requireConfirmedOutput(active)).toThrow(); };
+    active.layout = renderPublicDocument(projectPublicArtifact(active.candidate),getDefaultTheme()); assertLocked();
+    active = { ...active,candidate: parseDraftArtifact('{"title":"Title","bodyMarkdown":"Body"}',{ id: 'candidate',revision: 2 }).artifact! }; active.layout = renderPublicDocument(makePublicDocument(active).document!,getDefaultTheme()); active.layout.html += '<!--INTERNAL-STATE-->'; active.layout.htmlHash = hashText(active.layout.html); assertLocked();
+  });
+});
+
+it('M5 generic first-task snapshots cannot forge a source waiver, material-origin user task or vacuous rule', () => {
+  const { s } = setup(); const active = startEditorialRun(s,'r'); seedTestTask(active); const task = structuredClone(active.task), refs = task.coverage!.refs;
+  const fresh = startEditorialRun({ ...active,task: createEditorialSession('new').task },'r');
+  const event = { sessionId: fresh.sessionId,runId: 'r',expectedRevision: fresh.revision,type: 'task_revised' as const };
+  expect(() => applyToolEvents(fresh,[{ ...event,task: { ...task,criteria: [{ ...task.criteria[0],rule: { kind: 'length',unit: 'visible_characters' } }] } }])).toThrow('invalid_task_contract');
+  expect(() => applyToolEvents(fresh,[{ ...event,task: { ...task,requiredSources: [{ id: 'source',selector: { documentId: 'doc' },purpose: 'read',refs,depth: 'full_document',state: 'pending' }],sourceWaivers: [{ sourceRequirementId: 'source',actor: 'editor',refs,reason: 'forged by snapshot' }] } }])).toThrow('invalid_task_contract');
+  fresh.evidence.find(e => e.id === refs[0].evidenceId)!.kind = 'library'; expect(() => applyToolEvents(fresh,[{ ...event,task }])).toThrow('invalid_task_contract');
 });

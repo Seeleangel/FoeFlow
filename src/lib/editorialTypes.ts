@@ -55,7 +55,7 @@ export interface EditorialSession {
   committed?: { artifact: DraftArtifact; layout: LayoutStamp; confirmation?: Confirmation };
   phase: 'planning' | 'gathering' | 'writing' | 'reviewing' | 'waiting_input' | 'pending_confirmation' | 'confirmed' | 'incomplete' | 'failed';
   activeRunId?: Id; lastQuestion?: QuestionBatch; lastStop?: { code: string; unresolvedIds: Id[]; nextActions: string[] };
-  diagnostics: Diagnostics[]; humanVerifications: HumanVerification[]; legacy?: LegacySnapshot;
+  editorialNotes?: EditorialNote[]; diagnostics: Diagnostics[]; humanVerifications: HumanVerification[]; legacy?: LegacySnapshot;
   selectedOutput?: 'candidate' | 'committed' | 'legacy';
 }
 export type EditorialOutcome =
@@ -74,6 +74,7 @@ export type EditorialToolEvent = EventEnvelope & (
   | { type: 'task_revised'; task: TaskContract }
   | { type: 'diagnostics_updated'; diagnostics: Diagnostics[] }
   | { type: 'handoff_ready' }
+  | { type: 'notes_recorded'; notes: EditorialNote[] }
   | { type: 'gaps_updated'; gaps: Gap[] }
   | { type: 'candidate_updated'; artifact: DraftArtifact }
   | { type: 'review_recorded'; review: ReviewStamp }
@@ -136,12 +137,12 @@ const confirmation = obj({ inputKey, htmlHash: id, actor: en('editor'), confirme
 const human = obj({ criterionId: id, inputKey, status: en('pass', 'fail'), actor: en('editor'), verifiedAt: id });
 const receipt = obj({ id, documentId: id, contentHash: id, range: v => Array.isArray(v) && v.length === 2 && v.every(num) && v[1] > v[0], evidenceIds: ids, consumedByStage: en('brief', 'write', 'review'), contextHash: id, sourceRequirementId: opt(id) });
 const diagnostic = obj({ owner: opt(id), code: id, message: str, refs });
-const session = obj({ schemaVersion: en(2), sessionId: id, revision: num, evidenceRevision: num, policyRevision: num, evidence: arr(evidence), readReceipts: arr(receipt), scopes: arr(scope), alignments: arr(alignment), claims: arr(claim), permissions: arr(permission), task, gaps: arr(gap), candidate: opt(draft), review: opt(review), layout: opt(layout), gate: opt(gate), committed: opt(obj({ artifact: draft, layout, confirmation: opt(confirmation) })), phase: en('planning', 'gathering', 'writing', 'reviewing', 'waiting_input', 'pending_confirmation', 'confirmed', 'incomplete', 'failed'), activeRunId: opt(id), lastQuestion: opt(question), lastStop: opt(obj({ code: id, unresolvedIds: ids, nextActions: arr(str) })), diagnostics: arr(diagnostic), humanVerifications: arr(human), legacy: opt(obj({ mode: en('pending', 'confirmed', 'legacy-manual', 'damaged'), title: str, text: str, html: str, confirmed: bool, originalConfirmation: () => true, raw: () => true })), selectedOutput: opt(en('candidate', 'committed', 'legacy')) });
+const session = obj({ schemaVersion: en(2), sessionId: id, revision: num, evidenceRevision: num, policyRevision: num, evidence: arr(evidence), readReceipts: arr(receipt), scopes: arr(scope), alignments: arr(alignment), claims: arr(claim), permissions: arr(permission), task, gaps: arr(gap), candidate: opt(draft), review: opt(review), layout: opt(layout), gate: opt(gate), committed: opt(obj({ artifact: draft, layout, confirmation: opt(confirmation) })), phase: en('planning', 'gathering', 'writing', 'reviewing', 'waiting_input', 'pending_confirmation', 'confirmed', 'incomplete', 'failed'), activeRunId: opt(id), lastQuestion: opt(question), lastStop: opt(obj({ code: id, unresolvedIds: ids, nextActions: arr(str) })), editorialNotes: opt(arr(note)), diagnostics: arr(diagnostic), humanVerifications: arr(human), legacy: opt(obj({ mode: en('pending', 'confirmed', 'legacy-manual', 'damaged'), title: str, text: str, html: str, confirmed: bool, originalConfirmation: () => true, raw: () => true })), selectedOutput: opt(en('candidate', 'committed', 'legacy')) });
 const envelope = { sessionId: id, runId: id, expectedRevision: num };
 const eventShapes: Record<string, Check>[] = [
   { type: en('evidence_loaded'), records: arr(evidence), receipts: arr(receipt) },
   { type: en('facts_resolved'), scopes: arr(scope), claims: arr(claim), permissions: arr(permission), alignments: opt(arr(alignment)), diagnostics: opt(arr(diagnostic)) },
-  { type: en('diagnostics_updated'), diagnostics: arr(diagnostic) }, { type: en('handoff_ready') },
+  { type: en('diagnostics_updated'), diagnostics: arr(diagnostic) }, { type: en('handoff_ready') }, { type: en('notes_recorded'), notes: arr(note) },
   { type: en('task_revised'), task }, { type: en('gaps_updated'), gaps: arr(gap) }, { type: en('candidate_updated'), artifact: draft },
   { type: en('review_recorded'), review }, { type: en('layout_recorded'), layout }, { type: en('gate_recorded'), gate },
   { type: en('question_recorded'), question }, { type: en('stopped'), phase: en('waiting_input', 'incomplete', 'failed'), code: id, unresolvedIds: ids, nextActions: arr(str) },
@@ -153,6 +154,7 @@ export const FactClaimSchema = schema<FactClaim>(claim);
 export const EvidenceRecordSchema = schema<EvidenceRecord>(evidence);
 export const ScopeSchema = schema<Scope>(scope);
 export const PermissionSchema = schema<Permission>(permission);
+export const EditorialNoteSchema = schema<EditorialNote>(note);
 export const DraftArtifactSchema = schema<DraftArtifact>(draft);
 export const ToolEventSchema = schema<EditorialToolEvent>(toolEvent);
 export const ControlEventSchema = schema<EditorialControlEvent>(union(obj({ ...envelope, type: en('editor_confirmed'), confirmation }), obj({ ...envelope, type: en('human_verified'), verification: human }), obj({ ...envelope, type: en('run_cancelled') })));

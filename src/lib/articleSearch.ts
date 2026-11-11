@@ -1,4 +1,5 @@
 import { getDb } from '@/hooks/useDb';
+import { hashText } from './editorialTypes';
 
 export interface ArticleExample {
   title: string;
@@ -54,7 +55,6 @@ export function formatArticleExamples(examples: ArticleExample[]): string {
 
 /** Discovery metadata is not evidence and cannot issue a read receipt. */
 export async function searchEditorialLibraryDocuments(query: string): Promise<{ documentId: string; title: string; snippet: string; contentHash: string }[]> {
-  const { hashText } = await import('./editorialTypes');
   const db = await getDb(); const terms = query.normalize('NFKC').split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   if (!terms.length) return [];
   if (terms.length > 40) throw new Error('context_capacity');

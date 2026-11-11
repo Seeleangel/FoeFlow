@@ -81,7 +81,7 @@ export function validatePublicArtifact(s: EditorialSession): Diagnostics[] {
   if (/<[a-z!/?]|^\s*(?:::|```)/im.test(artifact.title + '\n' + artifact.bodyMarkdown)) block('unsafe_content', 'Markup requires revision, never silent stripping.');
   const publicText = artifact.title + '\n' + publicArtifactBlocks(artifact).map(b => b.text).join('\n') + '\n' + artifact.assets.filter(a => a.state !== 'omitted').map(a => a.publicCaption ?? '').join('\n');
   if (containsProtectedText(s, publicText)) block('protected_span', 'Protected source content appears in public prose; revise and re-review.');
-  if (artifact.editorialNotes.some(note => !!publicTextKey(note.text) && publicTextKey(publicText).includes(publicTextKey(note.text)))) block('workflow_note_span', 'An explicit private note was duplicated into public prose; revise without deleting the note.');
+  if ([...s.editorialNotes ?? [], ...artifact.editorialNotes].some(note => !!publicTextKey(note.text) && publicTextKey(publicText).includes(publicTextKey(note.text)))) block('workflow_note_span', 'An explicit private note was duplicated into public prose; revise without deleting the note.');
   const facts = resolveFacts(s); blockers.push(...facts.diagnostics);
   for (const link of artifact.claimLinks) if (!artifact.blocks.some(b => b.id === link.blockId) || link.claimIds.some(id => !facts.claims.some(c => c.id === id && c.epistemic === 'supported' && c.visibility === 'public'))) block('unknown_claim_link', 'Claim links do not attest truth or unknown claims.');
   const text = publicText;

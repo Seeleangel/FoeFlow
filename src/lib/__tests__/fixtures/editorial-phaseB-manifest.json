@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "scope": "deterministic known-development fixtures only; not model-quality or UI acceptance",
+  "operatorsSha256": "b4e524754277ba43d8771cc21994a3ee9f0fb9e34e57528213dd5f89f3c89e8f",
+  "supplementSha256": "9d42cc5144280c6cf2f81e233b05557338000404514f9309e170cfdea6c423eb",
+  "notes": [
+    "Original operator responses copied verbatim; no response or oracle is rewritten.",
+    "Supplement provides grounded preflight/extract responses; raw legacy queues remain separate.",
+    "Model never receives case IDs, operator scripts, or scoring oracles.",
+    "Layout is deterministic, so unused original layout responses are reported."
+  ]
+}

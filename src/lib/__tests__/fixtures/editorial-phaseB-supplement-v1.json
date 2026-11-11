@@ -1,0 +1,708 @@
+{
+  "R07": {
+    "requiredSources": [
+      0,
+      1
+    ],
+    "scopes": [
+      {
+        "id": "cycle10",
+        "label": "第10期结项",
+        "source": 0,
+        "anchor": "第10期",
+        "kind": "event"
+      },
+      {
+        "id": "cycle11",
+        "label": "第11期选拔",
+        "source": 1,
+        "anchor": "第11期",
+        "kind": "event"
+      }
+    ],
+    "facts": [
+      {
+        "id": "completed",
+        "scopeId": "cycle10",
+        "predicate": "completed_count",
+        "value": "19人结项",
+        "source": 0
+      },
+      {
+        "id": "excellent",
+        "scopeId": "cycle10",
+        "predicate": "excellent_count",
+        "value": "4人获优秀称号",
+        "source": 0
+      },
+      {
+        "id": "selected",
+        "scopeId": "cycle11",
+        "predicate": "selected_count",
+        "value": "19人入选",
+        "source": 1
+      },
+      {
+        "id": "planned",
+        "scopeId": "cycle11",
+        "predicate": "practice_phase",
+        "value": "计划于当年下半年",
+        "source": 1
+      }
+    ],
+    "include": [
+      "completed",
+      "excellent",
+      "selected",
+      "planned"
+    ]
+  },
+  "R12": {
+    "requiredSources": [
+      0,
+      1
+    ],
+    "scopes": [
+      {
+        "id": "cycle10",
+        "label": "第10期结项",
+        "source": 0,
+        "anchor": "第10期",
+        "kind": "event"
+      },
+      {
+        "id": "cycle11",
+        "label": "第11期选拔",
+        "source": 1,
+        "anchor": "第11期",
+        "kind": "event"
+      }
+    ],
+    "facts": [
+      {
+        "id": "completed",
+        "scopeId": "cycle10",
+        "predicate": "completed_count",
+        "value": "19人结项",
+        "source": 0
+      },
+      {
+        "id": "excellent",
+        "scopeId": "cycle10",
+        "predicate": "excellent_count",
+        "value": "4人获优秀称号",
+        "source": 0
+      },
+      {
+        "id": "selected",
+        "scopeId": "cycle11",
+        "predicate": "selected_count",
+        "value": "19人入选",
+        "source": 1
+      },
+      {
+        "id": "planned",
+        "scopeId": "cycle11",
+        "predicate": "practice_phase",
+        "value": "计划于当年下半年",
+        "source": 1
+      },
+      {
+        "id": "date10",
+        "scopeId": "cycle10",
+        "predicate": "time",
+        "value": "2025年4月9日",
+        "source": 0
+      },
+      {
+        "id": "date11",
+        "scopeId": "cycle11",
+        "predicate": "time",
+        "value": "2025年6月20日上午",
+        "source": 1
+      }
+    ],
+    "include": [
+      "completed",
+      "excellent",
+      "selected",
+      "planned",
+      "date10",
+      "date11"
+    ]
+  },
+  "R08": {
+    "requiredSources": [
+      0
+    ],
+    "scopes": [
+      {
+        "id": "imageA",
+        "label": "图A",
+        "source": 0,
+        "anchor": "图A",
+        "kind": "asset"
+      },
+      {
+        "id": "imageB",
+        "label": "图B",
+        "source": 0,
+        "anchor": "图B",
+        "kind": "asset"
+      },
+      {
+        "id": "imageC",
+        "label": "图C",
+        "source": 0,
+        "anchor": "图C",
+        "kind": "asset"
+      }
+    ],
+    "facts": [],
+    "permissions": [
+      {
+        "subjectId": "imageA",
+        "state": "allowed",
+        "purpose": "cover",
+        "source": 0,
+        "anchor": "图A是有公开授权的校园空景"
+      },
+      {
+        "subjectId": "imageB",
+        "state": "denied",
+        "purpose": "cover",
+        "source": 0,
+        "anchor": "图B含未授权的人脸"
+      }
+    ],
+    "permissionCriteria": [
+      {
+        "subjectId": "imageB",
+        "purpose": "cover",
+        "identity": "not_applicable"
+      }
+    ]
+  },
+  "R09": {
+    "requiredSources": [
+      0
+    ],
+    "scopes": [
+      {
+        "id": "whole",
+        "label": "全阶段结项",
+        "source": "editor",
+        "anchor": "全阶段结项",
+        "kind": "event"
+      },
+      {
+        "id": "approved",
+        "label": "立项阶段",
+        "source": 0,
+        "anchor": "82支实践队伍获立项",
+        "kind": "event"
+      },
+      {
+        "id": "sample",
+        "label": "第1期展示",
+        "source": 0,
+        "anchor": "第1期",
+        "kind": "event"
+      }
+    ],
+    "facts": [
+      {
+        "id": "approved-count",
+        "scopeId": "approved",
+        "predicate": "count",
+        "value": "82支",
+        "source": 0
+      },
+      {
+        "id": "sample-count",
+        "scopeId": "sample",
+        "predicate": "count",
+        "value": "8支",
+        "source": 0
+      }
+    ],
+    "requirements": [
+      {
+        "id": "completed-teams",
+        "scopeId": "whole",
+        "predicate": "completed_teams",
+        "label": "经核实的全阶段结项队伍总数",
+        "metric": {
+          "measure": "count",
+          "unit": "team",
+          "population": "whole-project",
+          "phase": "completed",
+          "aggregation": "total",
+          "precision": "exact"
+        }
+      },
+      {
+        "id": "students",
+        "scopeId": "whole",
+        "predicate": "participating_students",
+        "label": "经核实的全阶段参与学生总数",
+        "metric": {
+          "measure": "count",
+          "unit": "student",
+          "population": "whole-project",
+          "phase": "completed",
+          "aggregation": "total",
+          "precision": "exact"
+        }
+      }
+    ]
+  },
+  "R10": {
+    "requiredSources": [
+      0
+    ],
+    "scopes": [
+      {
+        "id": "interview1",
+        "label": "第1位真实受访同学",
+        "source": "editor",
+        "anchor": "三位真实同学",
+        "kind": "person",
+        "ordinal": "1"
+      },
+      {
+        "id": "interview2",
+        "label": "第2位真实受访同学",
+        "source": "editor",
+        "anchor": "三位真实同学",
+        "kind": "person",
+        "ordinal": "2"
+      },
+      {
+        "id": "interview3",
+        "label": "第3位真实受访同学",
+        "source": "editor",
+        "anchor": "三位真实同学",
+        "kind": "person",
+        "ordinal": "3"
+      }
+    ],
+    "facts": [],
+    "requirements": [
+      {
+        "id": "person1-experience",
+        "scopeId": "interview1",
+        "predicate": "experience",
+        "label": "第1位受访者的真实具体经历"
+      },
+      {
+        "id": "person1-quotation",
+        "scopeId": "interview1",
+        "predicate": "quotation",
+        "label": "第1位受访者的可公开引用的原话"
+      },
+      {
+        "id": "person2-experience",
+        "scopeId": "interview2",
+        "predicate": "experience",
+        "label": "第2位受访者的真实具体经历"
+      },
+      {
+        "id": "person2-quotation",
+        "scopeId": "interview2",
+        "predicate": "quotation",
+        "label": "第2位受访者的可公开引用的原话"
+      },
+      {
+        "id": "person3-experience",
+        "scopeId": "interview3",
+        "predicate": "experience",
+        "label": "第3位受访者的真实具体经历"
+      },
+      {
+        "id": "person3-quotation",
+        "scopeId": "interview3",
+        "predicate": "quotation",
+        "label": "第3位受访者的可公开引用的原话"
+      }
+    ],
+    "permissionCriteria": [
+      {
+        "subjectId": "interview1",
+        "purpose": "quotation",
+        "identity": "anonymous"
+      },
+      {
+        "subjectId": "interview2",
+        "purpose": "quotation",
+        "identity": "anonymous"
+      },
+      {
+        "subjectId": "interview3",
+        "purpose": "quotation",
+        "identity": "anonymous"
+      }
+    ]
+  },
+  "R11": {
+    "requiredSources": [
+      0
+    ],
+    "scopes": [
+      {
+        "id": "imageA",
+        "label": "图A",
+        "source": 0,
+        "anchor": "图A",
+        "kind": "asset"
+      },
+      {
+        "id": "imageB",
+        "label": "图B",
+        "source": 0,
+        "anchor": "图B",
+        "kind": "asset"
+      },
+      {
+        "id": "imageC",
+        "label": "图C",
+        "source": 0,
+        "anchor": "图C",
+        "kind": "asset"
+      }
+    ],
+    "facts": [
+      {
+        "id": "imageB-internal",
+        "scopeId": "imageB",
+        "predicate": "identifier",
+        "value": "图B",
+        "source": 0,
+        "visibility": "editor_only"
+      },
+      {
+        "id": "imageC-internal",
+        "scopeId": "imageC",
+        "predicate": "identifier",
+        "value": "图C",
+        "source": 0,
+        "visibility": "editor_only"
+      }
+    ],
+    "permissions": [
+      {
+        "subjectId": "imageA",
+        "state": "allowed",
+        "purpose": "cover",
+        "source": 0,
+        "anchor": "图A是有公开授权的校园空景"
+      },
+      {
+        "subjectId": "imageB",
+        "state": "denied",
+        "purpose": "cover",
+        "source": 0,
+        "anchor": "图B含未授权的人脸"
+      }
+    ],
+    "notes": [
+      {
+        "id": "image-b-status",
+        "kind": "asset",
+        "text": "图B待公开授权，不使用未授权人脸。",
+        "relatedIds": [
+          "imageB"
+        ]
+      },
+      {
+        "id": "image-c-status",
+        "kind": "asset",
+        "text": "图C文件未收到，待补件。",
+        "relatedIds": [
+          "imageC"
+        ]
+      }
+    ]
+  },
+  "R13": {
+    "requiredSources": [
+      0
+    ],
+    "scopes": [
+      {
+        "id": "activity",
+        "label": "春日 Citywalk",
+        "source": "editor",
+        "anchor": "春日 Citywalk",
+        "kind": "event"
+      }
+    ],
+    "facts": [
+      {
+        "id": "paused",
+        "scopeId": "activity",
+        "predicate": "current_status",
+        "value": "活动暂缓",
+        "source": "editor"
+      }
+    ],
+    "include": [
+      "paused"
+    ]
+  },
+  "R14": {
+    "requiredSources": [
+      0
+    ],
+    "scopes": [
+      {
+        "id": "ceremony",
+        "label": "毕业典礼",
+        "source": 0,
+        "anchor": "毕业典礼",
+        "kind": "event"
+      }
+    ],
+    "facts": [
+      {
+        "id": "time",
+        "scopeId": "ceremony",
+        "predicate": "time",
+        "value": "2025年6月20日9:00",
+        "source": 0
+      },
+      {
+        "id": "place",
+        "scopeId": "ceremony",
+        "predicate": "location",
+        "value": "普陀校区体育馆",
+        "source": 0
+      },
+      {
+        "id": "audience",
+        "scopeId": "ceremony",
+        "predicate": "audience",
+        "value": "本届毕业生",
+        "source": 0
+      }
+    ],
+    "include": [
+      "time",
+      "place"
+    ],
+    "location": "first_body_paragraph"
+  },
+  "R15": {
+    "requiredSources": [
+      0
+    ],
+    "scopes": [
+      {
+        "id": "ceremony",
+        "label": "毕业典礼",
+        "source": 0,
+        "anchor": "毕业典礼",
+        "kind": "event"
+      }
+    ],
+    "facts": [
+      {
+        "id": "time",
+        "scopeId": "ceremony",
+        "predicate": "time",
+        "value": "2025年6月20日9:00",
+        "source": 0
+      },
+      {
+        "id": "place",
+        "scopeId": "ceremony",
+        "predicate": "location",
+        "value": "普陀校区体育馆",
+        "source": 0
+      },
+      {
+        "id": "audience",
+        "scopeId": "ceremony",
+        "predicate": "audience",
+        "value": "本届毕业生",
+        "source": 0
+      }
+    ],
+    "include": [],
+    "location": "first_body_paragraph",
+    "requirements": [
+      {
+        "id": "registration-channel",
+        "scopeId": "ceremony",
+        "predicate": "registration_channel",
+        "label": "报名方式与实际渠道"
+      },
+      {
+        "id": "registration-deadline",
+        "scopeId": "ceremony",
+        "predicate": "registration_deadline",
+        "label": "已确定的报名截止时间"
+      }
+    ]
+  },
+  "D04": {
+    "requiredSources": [
+      0
+    ],
+    "scopes": [
+      {
+        "id": "meeting",
+        "label": "本期读书会",
+        "source": "editor",
+        "anchor": "江岚读书会本期",
+        "kind": "event"
+      }
+    ],
+    "facts": [
+      {
+        "id": "time",
+        "scopeId": "meeting",
+        "predicate": "time",
+        "value": "2026 年 12 月 9 日 18:30",
+        "source": "editor"
+      },
+      {
+        "id": "place",
+        "scopeId": "meeting",
+        "predicate": "location",
+        "value": "知行楼 204 室",
+        "source": "editor"
+      },
+      {
+        "id": "book",
+        "scopeId": "meeting",
+        "predicate": "book",
+        "value": "《乡土中国》第一章",
+        "source": 0
+      },
+      {
+        "id": "capacity",
+        "scopeId": "meeting",
+        "predicate": "capacity",
+        "value": "24 人",
+        "source": 0
+      },
+      {
+        "id": "preparation",
+        "scopeId": "meeting",
+        "predicate": "preparation",
+        "value": "每人带一个阅读问题",
+        "source": 0
+      }
+    ],
+    "include": [
+      "time",
+      "place",
+      "book",
+      "capacity",
+      "preparation"
+    ]
+  },
+  "H04": {
+    "requiredSources": [],
+    "scopes": [
+      {
+        "id": "exhibition",
+        "label": "展览",
+        "source": "editor",
+        "anchor": "校园展览",
+        "kind": "event"
+      }
+    ],
+    "facts": [
+      {
+        "id": "groups",
+        "scopeId": "exhibition",
+        "predicate": "groups",
+        "value": "素描组和摄影组",
+        "source": "editor"
+      },
+      {
+        "id": "time",
+        "scopeId": "exhibition",
+        "predicate": "time",
+        "value": "2026 年 12 月 4 日",
+        "source": "editor"
+      },
+      {
+        "id": "place",
+        "scopeId": "exhibition",
+        "predicate": "location",
+        "value": "白榆展厅",
+        "source": "editor"
+      },
+      {
+        "id": "quote",
+        "scopeId": "exhibition",
+        "predicate": "quotation",
+        "value": "这是学院规模最大的展览",
+        "source": "editor",
+        "epistemic": "pending",
+        "visibility": "editor_only"
+      }
+    ],
+    "include": [
+      "groups",
+      "time",
+      "place"
+    ],
+    "notes": [
+      {
+        "id": "quote-check",
+        "kind": "fact_check",
+        "text": "请核实「这是学院规模最大的展览」的来源和真实性；当前公开正文不采用。",
+        "relatedIds": [
+          "quote"
+        ]
+      }
+    ]
+  },
+  "H05": {
+    "requiredSources": [
+      0
+    ],
+    "scopes": [
+      {
+        "id": "exhibition",
+        "label": "澄湾成果展",
+        "source": "editor",
+        "anchor": "澄湾成果展",
+        "kind": "event"
+      }
+    ],
+    "facts": [
+      {
+        "id": "close",
+        "scopeId": "exhibition",
+        "predicate": "closing_time",
+        "value": "2026 年 12 月 20 日 16:00",
+        "source": "editor"
+      },
+      {
+        "id": "free",
+        "scopeId": "exhibition",
+        "predicate": "admission",
+        "value": "免费开放",
+        "source": 0
+      },
+      {
+        "id": "booking",
+        "scopeId": "exhibition",
+        "predicate": "booking",
+        "value": "无需预约",
+        "source": 0
+      }
+    ],
+    "include": [
+      "close",
+      "free",
+      "booking"
+    ],
+    "location": "first_body_paragraph"
+  }
+}

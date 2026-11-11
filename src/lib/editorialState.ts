@@ -57,12 +57,13 @@ export function applyToolEvents(session: EditorialSession, events: readonly Edit
         if (stableJson({ ...s.task, revision: 0 }) === stableJson({ ...e.task, revision: 0 })) break;
         s = invalidateEditorialStamps(s); s.task = e.task; break;
       case 'diagnostics_updated': s = invalidateEditorialStamps(s); s.diagnostics = e.diagnostics; break;
+      case 'notes_recorded': s.editorialNotes = mergeEditorialNotes(s.editorialNotes ?? [], e.notes); if (s.candidate) s.candidate.editorialNotes = mergeEditorialNotes(s.candidate.editorialNotes, s.editorialNotes); break;
       case 'handoff_ready': assertConfirmable(s); s.phase = 'pending_confirmation'; break;
       case 'gaps_updated': s.gaps = e.gaps; break;
       case 'candidate_updated': {
         if (e.artifact.contentHash !== artifactContentHash(e.artifact.title, e.artifact.bodyMarkdown, e.artifact.assets)) throw new Error('content_key_mismatch');
         if (s.candidate && s.candidate.id === e.artifact.id && e.artifact.revision <= s.candidate.revision) throw new Error('invalid_candidate_revision');
-        s = invalidateEditorialStamps(s); s.candidate = { ...e.artifact, editorialNotes: mergeEditorialNotes(s.candidate?.editorialNotes ?? [], e.artifact.editorialNotes) }; break;
+        s = invalidateEditorialStamps(s); s.candidate = { ...e.artifact, editorialNotes: mergeEditorialNotes(mergeEditorialNotes(s.editorialNotes ?? [], s.candidate?.editorialNotes ?? []), e.artifact.editorialNotes) }; break;
       }
       case 'review_recorded':
         validContent(s); if (!sameInputKey(e.review.inputKey, currentInputKey(s))) throw new Error('stale_review'); s.review = e.review; s.phase = 'reviewing';
