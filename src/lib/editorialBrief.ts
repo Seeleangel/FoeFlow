@@ -1,4 +1,5 @@
 import type { AIMessage } from './ai';
+import { hashText } from './editorialTypes';
 
 const FIELD_LABELS = {
   topic: '主题',
@@ -129,7 +130,7 @@ export function legacyBriefCandidates(brief: EditorialBrief, session: import('./
     const source = session.evidence.find(e => e.id === fact.source), start = source?.text.indexOf(fact.quote) ?? -1;
     if (!source || start < 0 || !fact.quote.includes(fact.value)) { diagnostics.push({ code: 'invalid_reference', message: 'Legacy candidate needs exact source offsets.', refs: [] }); continue; }
     const refs = [{ evidenceId: source.id, revision: source.revision, start, end: start + fact.quote.length, quote: fact.quote }];
-    const id = `legacy-${source.id}-${start}-${fact.field}-${encodeURIComponent(fact.value)}`;
+    const id = 'legacy-' + hashText(`${source.id}:${start}:${fact.field}:${fact.value}`).slice(0, 24);
     scopes.push({ id, kind: 'other', label: FIELD_LABELS[fact.field], qualifiers: [], anchors: refs, identity: 'provisional' });
     claims.push({ id: id + '-claim', selector: { scopeId: id, predicate: fact.field }, value: fact.value, refs, epistemic: 'unknown', visibility: fact.status === 'private' ? 'private' : 'public', statusBasis: fact.status === 'private' ? refs : [] });
   }

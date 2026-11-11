@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createEditorialSession, hashText, type EvidenceRef, type FactClaim, type EditorialSession, type MetricSpec } from '../editorialTypes';
-import { resolveFacts, validateEvidenceRef, alignFactScopes } from '../editorialFacts';
+import { resolveFacts, validateEvidenceRef, alignFactScopes, applyFactPatch } from '../editorialFacts';
 function fixture(names = ['Orchid', 'Pine'], values = ['Tuesday', 'Friday']) {
   const s = createEditorialSession('s');
   const text = `${names[0]} ${values[0]}. ${names[1]} ${values[1]}.`;
@@ -19,6 +19,10 @@ describe('scoped evidence resolution', () => {
   it('does not ignore provisional scope ambiguity', () => {
     const { s } = fixture(); s.scopes.forEach(scope => { scope.identity = 'provisional'; }); s.task.targetScopes = ['s0', 's1'];
     expect(resolveFacts(s).conflicts.filter(g => g.kind === 'scope')).toHaveLength(2);
+  });
+  it('splitting one anchored identity into duplicate scope IDs creates an alignment gap, not a conflict escape', () => {
+    const { s } = fixture(); s.scopes[1].anchors = s.scopes[0].anchors; s.task.targetScopes = ['s0', 's1'];
+    expect(resolveFacts(s).conflicts.some(g => g.kind === 'scope')).toBe(true);
   });
   it('only merges scopes using evidence from both anchors', () => {
     const { s, ref } = fixture(); s.alignments = [{ leftId: 's0', rightId: 's1', refs: [ref('Orchid'), ref('Pine')] }];
@@ -56,6 +60,15 @@ describe('scoped evidence resolution', () => {
     const { s } = fixture(); s.evidence[0].kind = 'legacy_draft';
     expect(resolveFacts(s).claims.every(c => c.epistemic === 'unknown')).toBe(true);
     expect(resolveFacts(s).diagnostics.some(d => d.code === 'legacy_not_evidence')).toBe(true);
+  });
+  it('candidate patches preserve known facts when an ungrounded downgrade or unrelated field arrives', () => {
+    const { s } = fixture(); const patch = { claims: [{ ...s.claims[0], epistemic: 'pending' }] };
+    const next = applyFactPatch(s, patch); expect(next.claims.find(c => c.id === 'c0')?.epistemic).toBe('supported'); expect(next.claims.find(c => c.id === 'c1')).toEqual(s.claims[1]);
+    expect(next.diagnostics.some(d => d.code === 'missing_status_basis')).toBe(true); expect(s.diagnostics).toEqual([]);
+  });
+  it('invalid alignment does not certify provisional scopes', () => {
+    const { s, ref } = fixture(); s.scopes[0].identity = 'provisional'; s.task.targetScopes = ['s0']; s.alignments = [{ leftId: 's0', rightId: 'missing', refs: [ref('Orchid')] }];
+    expect(resolveFacts(s).conflicts.some(g => g.kind === 'scope')).toBe(true);
   });
   it('permissions are separate from truth and restricted states remain restricted', () => {
     const { s, ref } = fixture(); s.permissions = [{ id: 'p', subjectId: 's0', uses: [{ channel: 'web', purpose: 'illustration', identity: 'not_applicable' }], state: 'denied', refs: [ref('Orchid Tuesday')] }];

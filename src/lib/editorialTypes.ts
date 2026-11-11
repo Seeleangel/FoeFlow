@@ -16,7 +16,7 @@ export type CriterionRule =
   | { kind: 'exclude_claims'; factIds: Id[] }
   | { kind: 'length'; min?: number; max?: number; unit: 'visible_characters' }
   | { kind: 'preserve_blocks'; blockHashes: Hash[] }
-  | { kind: 'permission'; subjectIds: Id[]; use: string }
+  | { kind: 'permission'; subjectIds: Id[]; use: string; channel?: string; identity?: PermissionUse['identity'] }
   | { kind: 'source_read'; sourceRequirementId: Id }
   | { kind: 'semantic'; instruction: string };
 export interface AcceptanceCriterion { id: Id; origin: 'user' | 'template' | 'policy'; refs: EvidenceRef[]; rule: CriterionRule; severity: 'blocking' | 'advisory'; verification: 'deterministic' | 'semantic' | 'human' }
@@ -28,7 +28,7 @@ export interface QuestionBatch { id: Id; gapIds: Id[]; items: { gapId: Id; subje
 export interface EditorialNote { id: Id; kind: 'asset' | 'fact_check' | 'process' | 'advisory'; text: string; relatedIds: Id[] }
 export interface AssetUse { assetId: Id; slotId: Id; use: string; channel?: string; identity?: PermissionUse['identity']; publicCaption?: string; state: 'included' | 'placeholder' | 'omitted' }
 export interface ContentBlock { id: Id; kind: 'paragraph' | 'heading' | 'list' | 'quote' | 'asset_slot'; text: string }
-export interface DraftArtifact { schemaVersion: 2; id: Id; revision: number; title: string; bodyMarkdown: string; contentHash: Hash; blocks: ContentBlock[]; claimLinks: { blockId: Id; claimIds: Id[] }[]; editorialNotes: EditorialNote[]; assets: AssetUse[]; origin: 'model' | 'editor' | 'legacy' }
+export interface DraftArtifact { schemaVersion: 2; id: Id; revision: number; title: string; bodyMarkdown: string; contentHash: Hash; blocks: ContentBlock[]; claimLinks: { blockId: Id; claimIds: Id[] }[]; editorialNotes: EditorialNote[]; assets: AssetUse[]; origin: 'model' | 'editor' | 'legacy'; originalMarkdown?: string }
 export interface InputKey { contentHash: Hash; evidenceRevision: number; taskRevision: number; policyRevision: number }
 export interface GateCheck { criterionId: Id; status: 'pass' | 'fail' | 'unknown'; verifier: string; detail: string }
 export interface GateReport { inputKey: InputKey; checks: GateCheck[]; blockers: string[] }
@@ -41,6 +41,8 @@ export interface PublicDocument { title: string; bodyMarkdown: string; blocks: C
 export interface ReadReceipt { id: Id; documentId: Id; contentHash: Hash; range: [number, number]; evidenceIds: Id[]; consumedByStage: 'brief' | 'write' | 'review'; contextHash: Hash; sourceRequirementId?: Id }
 export interface RunBudget { decisions: number; writes: number; searches: number; modelCalls: number; maxNoProgress: number; maxElapsedMs: number }
 export const DEFAULT_RUN_BUDGET: Readonly<RunBudget> = Object.freeze({ decisions: 12, writes: 3, searches: 3, modelCalls: 24, maxNoProgress: 2, maxElapsedMs: 600_000 });
+/** Stable core reason codes. New modules may add domain-specific diagnostic codes. */
+export const EDITORIAL_CODES = Object.freeze({ invalidSchema: 'invalid_schema', staleOwnership: 'stale_ownership', contextCapacity: 'context_capacity', invalidReference: 'invalid_reference', scopeUnresolved: 'scope_unresolved', taskPatchRejected: 'task_patch_rejected', protectedSpan: 'protected_span', assetPermission: 'asset_permission', claimPermission: 'claim_permission', outputNotConfirmed: 'output_not_confirmed', sourceUnavailable: 'source_unavailable', noProgress: 'no_progress', budgetExhausted: 'budget_exhausted' });
 export interface Diagnostics { code: string; message: string; refs: EvidenceRef[] }
 export interface FactResolution { claims: FactClaim[]; conflicts: Gap[]; diagnostics: Diagnostics[]; permissions: Permission[] }
 export interface ProjectionResult { document?: PublicDocument; blockers: Diagnostics[] }
@@ -110,7 +112,7 @@ const source = obj({ id, selector: obj({ documentId: opt(id), title: opt(id) }),
 const rule = union(
   obj({ kind: en('include_facts'), factIds: ids, location: en('body', 'first_body_paragraph') }),
   obj({ kind: en('exclude_claims'), factIds: ids }), obj({ kind: en('length'), min: opt(num), max: opt(num), unit: en('visible_characters') }),
-  obj({ kind: en('preserve_blocks'), blockHashes: ids }), obj({ kind: en('permission'), subjectIds: ids, use: id }),
+  obj({ kind: en('preserve_blocks'), blockHashes: ids }), obj({ kind: en('permission'), subjectIds: ids, use: id, channel: opt(id), identity: opt(en('named', 'anonymous', 'not_applicable')) }),
   obj({ kind: en('source_read'), sourceRequirementId: id }), obj({ kind: en('semantic'), instruction: id }));
 const criterion = obj({ id, origin: en('user', 'template', 'policy'), refs, rule, severity: en('blocking', 'advisory'), verification: en('deterministic', 'semantic', 'human') });
 const requirement = obj({ id, selector, label: id, reason: id, refs, necessity: en('blocking', 'optional'), resolution: en('supply_fact', 'select_option', 'omit_or_replace') });
@@ -121,7 +123,7 @@ const question = obj({ id, gapIds: ids, items: arr(obj({ gapId: id, subject: id,
 const note = obj({ id, kind: en('asset', 'fact_check', 'process', 'advisory'), text: str, relatedIds: ids });
 const asset = obj({ assetId: id, slotId: id, use: id, channel: opt(id), identity: opt(en('named', 'anonymous', 'not_applicable')), publicCaption: opt(str), state: en('included', 'placeholder', 'omitted') });
 const block = obj({ id, kind: en('paragraph', 'heading', 'list', 'quote', 'asset_slot'), text: str });
-const draft = obj({ schemaVersion: en(2), id, revision: num, title: id, bodyMarkdown: id, contentHash: id, blocks: arr(block), claimLinks: arr(obj({ blockId: id, claimIds: ids })), editorialNotes: arr(note), assets: arr(asset), origin: en('model', 'editor', 'legacy') });
+const draft = obj({ schemaVersion: en(2), id, revision: num, title: id, bodyMarkdown: id, contentHash: id, blocks: arr(block), claimLinks: arr(obj({ blockId: id, claimIds: ids })), editorialNotes: arr(note), assets: arr(asset), origin: en('model', 'editor', 'legacy'), originalMarkdown: opt(str) });
 const inputKey = obj({ contentHash: str, evidenceRevision: num, taskRevision: num, policyRevision: num });
 const gate = obj({ inputKey, checks: arr(obj({ criterionId: id, status: en('pass', 'fail', 'unknown'), verifier: id, detail: str })), blockers: arr(str) });
 const issue = obj({ id, category: en('unsupported_claim', 'scope', 'privacy', 'permission', 'workflow_leak', 'constraint', 'style'), severity: en('blocking', 'advisory'), relatedIds: ids, span: opt(obj({ blockId: id, start: num, end: num })), detail: str });
@@ -150,6 +152,23 @@ export const PermissionSchema = schema<Permission>(permission);
 export const DraftArtifactSchema = schema<DraftArtifact>(draft);
 export const ToolEventSchema = schema<EditorialToolEvent>(toolEvent);
 export const ControlEventSchema = schema<EditorialControlEvent>(union(obj({ ...envelope, type: en('editor_confirmed'), confirmation }), obj({ ...envelope, type: en('human_verified'), verification: human }), obj({ ...envelope, type: en('run_cancelled') })));
+export const EvidenceRefSchema = schema<EvidenceRef>(ref);
+export const InformationRequirementSchema = schema<InformationRequirement>(requirement);
+export const ScopeAlignmentSchema = schema<ScopeAlignment>(alignment);
+export const ReadReceiptSchema = schema<ReadReceipt>(receipt);
+export const GateReportSchema = schema<GateReport>(gate);
+export const ReviewStampSchema = schema<ReviewStamp>(review);
+export const LayoutStampSchema = schema<LayoutStamp>(layout);
+export const RunBudgetSchema = schema<RunBudget>(obj({ decisions: num, writes: num, searches: num, modelCalls: num, maxNoProgress: num, maxElapsedMs: num }));
+const range: Check = v => Array.isArray(v) && v.length === 2 && v.every(num) && v[1] > v[0];
+export const ToolActionSchema = schema<ToolAction>(union(
+  obj({ tool: en('search'), query: id, forRequirementIds: ids }), obj({ tool: en('read'), documentId: id, sourceRequirementId: id, range: opt(range) }),
+  obj({ tool: en('write'), instructions: id, repairCriterionIds: ids }), obj({ tool: en('review') }), obj({ tool: en('layout'), themeId: id }), obj({ tool: en('ask'), gapIds: ids }), obj({ tool: en('submit') })
+));
+export const ToolResultSchema = schema<ToolResult>(obj({ tool: en('search', 'read', 'write', 'review', 'layout', 'ask', 'submit'), status: en('progress', 'no_progress', 'rejected', 'failed'), code: id, changedIds: ids, events: arr(toolEvent), allowedNext: arr(en('search', 'read', 'write', 'review', 'layout', 'ask', 'submit')), diagnostics: arr(diagnostic) }));
+export const EditorialOutcomeSchema = schema<EditorialOutcome>(union(
+  obj({ type: en('question'), session, question }), obj({ type: en('draft'), session, artifact: draft, handoff: obj({ status: en('pending') }) }), obj({ type: en('incomplete', 'failed'), session, reason: id })
+));
 export function createEditorialSession(sessionId: string): EditorialSession {
   return { schemaVersion: 2, sessionId, revision: 0, evidenceRevision: 0, policyRevision: 0, evidence: [], readReceipts: [], scopes: [], alignments: [], claims: [], permissions: [], gaps: [], diagnostics: [], humanVerifications: [], task: { schemaVersion: 2, revision: 0, objective: '', intents: [], targetScopes: [], requirements: [], requiredSources: [], criteria: [], permittedOmissions: [], sourceWaivers: [] }, phase: 'planning' };
 }
@@ -175,3 +194,15 @@ export function hashText(text: string): Hash {
   }
   return h.map(x => (x>>>0).toString(16).padStart(8,'0')).join('');
 }
+
+/** Notes never affect this key; public asset identity, captions and inclusion do. */
+export function artifactContentHash(title: string, bodyMarkdown: string, assets: AssetUse[] = []): Hash {
+  const active = assets.filter(asset => asset.state !== 'omitted');
+  return hashText(title + '\n' + bodyMarkdown + (active.length ? '\nassets:' + stableJson(active) : ''));
+}
+
+export function currentInputKey(s: EditorialSession): InputKey { return { contentHash: s.candidate?.contentHash ?? '', evidenceRevision: s.evidenceRevision, taskRevision: s.task.revision, policyRevision: s.policyRevision }; }
+export function sameInputKey(a: InputKey, b: InputKey): boolean { return stableJson(a) === stableJson(b); }
+
+/** Entity order is not evidence progress. */
+export function sameEntitySet(a: readonly unknown[], b: readonly unknown[]): boolean { return stableJson(a.map(stableJson).sort()) === stableJson(b.map(stableJson).sort()); }

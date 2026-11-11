@@ -33,6 +33,10 @@ describe('evidence-backed task revisions', () => {
     s.evidence[0].kind = 'editor_message'; const first = applyTaskPatch(s, patch);
     const next = applyTemplateTaskPatch(first, { baseRevision: 1, refs, criteria: [{ ...criterion, origin: 'template', severity: 'advisory' }] }); expect(next.task.criteria[0].origin).toBe('user');
   });
+  it('repeated identical patches do not manufacture task progress', () => {
+    const { s, patch } = fixture(); const first = applyTaskPatch(s, patch); const next = applyTaskPatch(first, { ...patch, baseRevision: first.task.revision });
+    expect(next.task.revision).toBe(first.task.revision); expect(next.revision).toBe(first.revision);
+  });
   it('reports stale, malformed and empty plans instead of silently passing', () => {
     const { s, patch } = fixture(); for (const bad of [{ ...patch, baseRevision: 10 }, { baseRevision: 0, refs: patch.refs, objective: 'Complex task', intents: ['inform'] }, { ...patch, criteria: [{}] }]) {
       const next = applyTaskPatch(s, bad); expect(next.task.revision).toBe(0); expect(next.diagnostics.length).toBeGreaterThan(0);

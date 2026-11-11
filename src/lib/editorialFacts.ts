@@ -1,4 +1,4 @@
-import { FactClaimSchema, ScopeSchema, PermissionSchema, hashText, stableJson, type EditorialSession, type EvidenceRef, type FactClaim, type FactSelector, type FactResolution, type Diagnostics, type Gap, type PermissionUse, type Scope } from './editorialTypes';
+import { EditorialSessionSchema, FactClaimSchema, ScopeSchema, PermissionSchema, hashText, stableJson, sameEntitySet, type EditorialSession, type EvidenceRef, type FactClaim, type FactSelector, type FactResolution, type Diagnostics, type Gap, type PermissionUse, type Scope } from './editorialTypes';
 export const FACT_CAPACITY = Object.freeze({ claims: 256, evidenceCharacters: 120_000 });
 export function validateEvidenceRef(s: EditorialSession, ref: EvidenceRef): boolean {
   const source = s.evidence.find(e => e.id === ref.evidenceId);
@@ -9,17 +9,18 @@ export function selectorKey(selector: FactSelector, scopeIds?: Map<string, strin
 export function sameSelector(a: FactSelector, b: FactSelector): boolean { return selectorKey(a) === selectorKey(b); }
 const normalized = (s: string) => s.normalize('NFKC').replace(/\s+/g, '');
 function covers(ref: EvidenceRef, anchor: EvidenceRef) { return ref.evidenceId === anchor.evidenceId && ref.revision === anchor.revision && ref.start <= anchor.start && ref.end >= anchor.end; }
-export function alignFactScopes(s: EditorialSession): { scopeIds: Map<string, string>; diagnostics: Diagnostics[] } {
-  const scopeIds = new Map(s.scopes.map(scope => [scope.id, scope.id])), diagnostics: Diagnostics[] = [];
+export function alignFactScopes(s: EditorialSession): { scopeIds: Map<string, string>; alignedScopeIds: Set<string>; diagnostics: Diagnostics[] } {
+  const scopeIds = new Map(s.scopes.map(scope => [scope.id, scope.id])), diagnostics: Diagnostics[] = [], alignedScopeIds = new Set<string>();
   for (const alignment of s.alignments) {
     const left = s.scopes.find(scope => scope.id === alignment.leftId), right = s.scopes.find(scope => scope.id === alignment.rightId);
-    if (!left || !right || left.kind !== right.kind || !validRefs(s, alignment.refs) || ![left, right].every(scope => scope.anchors.some(anchor => alignment.refs.some(ref => covers(ref, anchor))))) {
+    if (!left || !right || left.id === right.id || left.kind !== right.kind || !validRefs(s, alignment.refs) || ![left, right].every(scope => scope.anchors.some(anchor => alignment.refs.some(ref => covers(ref, anchor))))) {
       diagnostics.push({ code: 'invalid_alignment', message: 'Scope alignment requires valid evidence for both identities.', refs: alignment.refs }); continue;
     }
+    alignedScopeIds.add(left.id); alignedScopeIds.add(right.id);
     const a = scopeIds.get(left.id)!, b = scopeIds.get(right.id)!, canonical = [a, b].sort()[0];
     for (const [id, value] of scopeIds) if (value === a || value === b) scopeIds.set(id, canonical);
   }
-  return { scopeIds, diagnostics };
+  return { scopeIds, alignedScopeIds, diagnostics };
 }
 function makeGap(claim: FactClaim, kind: 'scope' | 'conflict', ids: string[], values: string[]): Gap {
   const key = selectorKey(claim.selector); const id = kind + '-' + hashText(key).slice(0, 24);
@@ -65,7 +66,8 @@ export function resolveFacts(s: EditorialSession): FactResolution {
   const relevant = new Set([...s.task.targetScopes, ...s.task.requirements.map(r => r.selector.scopeId), ...s.candidate?.claimLinks.flatMap(link => link.claimIds.flatMap(id => current.filter(c => c.id === id).map(c => c.selector.scopeId))) ?? []]);
   for (const claim of current) {
     const scope = scopes.find(scope => scope.id === claim.selector.scopeId)!;
-    if (scope.identity === 'provisional' && !s.alignments.some(a => a.leftId === scope.id || a.rightId === scope.id)) {
+    const duplicateIdentity = scopes.some(other => other.id !== scope.id && other.kind === scope.kind && stableJson(other.anchors) === stableJson(scope.anchors) && stableJson(other.qualifiers) === stableJson(scope.qualifiers) && aligned.scopeIds.get(other.id) !== aligned.scopeIds.get(scope.id));
+    if ((scope.identity === 'provisional' && !aligned.alignedScopeIds.has(scope.id)) || duplicateIdentity) {
       if (relevant.has(scope.id)) conflicts.push(makeGap(claim, 'scope', [claim.id], [claim.value])); continue;
     }
     if (claim.epistemic !== 'supported' && claim.epistemic !== 'disputed') continue;
@@ -85,4 +87,48 @@ export function resolveFacts(s: EditorialSession): FactResolution {
 export function permissionAllows(s: EditorialSession, subjectId: string, use: PermissionUse): boolean {
   const permissions = resolveFacts(s).permissions.filter(p => p.subjectId === subjectId && p.uses.some(u => stableJson(u) === stableJson(use)));
   return permissions.length > 0 && permissions.every(p => p.state === 'allowed');
+}
+
+/** Evidence-backed upserts; omissions never delete prior claims and invalid changes cannot downgrade them.
+ * Preflight-only: this returns a new invalidated session. Runtime integration may instead emit its fact arrays as one facts_resolved event. */
+export function applyFactPatch(session: EditorialSession, raw: unknown): EditorialSession {
+  const next = structuredClone(session);
+  const diagnose = (code: string, message: string) => { next.diagnostics.push({ code, message, refs: [] }); return next; };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(key => !['scopes', 'alignments', 'claims', 'permissions'].includes(key))) return diagnose('invalid_fact_patch', 'Expected structured candidate upserts.');
+  try {
+    const patch = raw as Record<string, unknown>;
+    const merge = <T extends { id: string }>(old: T[], candidates: unknown): T[] => {
+      if (candidates === undefined) return old;
+      if (!Array.isArray(candidates)) throw new Error('invalid_patch');
+      const map = new Map(old.map(item => [item.id, item]));
+      for (const item of candidates as T[]) { if (!item || typeof item.id !== 'string') throw new Error('invalid_patch'); map.set(item.id, item); }
+      return [...map.values()];
+    };
+    const candidate = EditorialSessionSchema.parse({ ...next, scopes: merge(next.scopes, patch.scopes), claims: merge(next.claims, patch.claims), permissions: merge(next.permissions, patch.permissions), alignments: patch.alignments === undefined ? next.alignments : [...next.alignments, ...(patch.alignments as EditorialSession['alignments'])] });
+    const resolved = resolveFacts(candidate); next.diagnostics.push(...resolved.diagnostics);
+    if (resolved.diagnostics.some(d => d.code === 'context_capacity')) return next;
+    const claims = new Map(session.claims.map(c => [c.id, c]));
+    for (const claim of resolved.claims) {
+      const previous = claims.get(claim.id);
+      if (previous && (!sameSelector(previous.selector, claim.selector) || previous.value !== claim.value)) { diagnose('claim_identity_changed', 'Changed assertions require a new ID and targeted supersedes evidence.'); continue; }
+      claims.set(claim.id, claim);
+    }
+    next.claims = [...claims.values()]; next.scopes = candidate.scopes; next.alignments = candidate.alignments;
+    const permissions = new Map(session.permissions.map(p => [p.id, p]));
+    for (const permission of resolved.permissions) {
+      const previous = permissions.get(permission.id);
+      if (previous && previous.state !== 'allowed' && permission.state === 'allowed') { diagnose('permission_upgrade_requires_editor', 'Restricted permission cannot be promoted by a model candidate.'); continue; }
+      permissions.set(permission.id, permission);
+    }
+    next.permissions = [...permissions.values()];
+    if (sameEntitySet(next.claims, session.claims) && sameEntitySet(next.scopes, session.scopes) && sameEntitySet(next.permissions, session.permissions) && sameEntitySet(next.alignments, session.alignments)) return next;
+    delete next.review; delete next.layout; delete next.gate; next.humanVerifications = []; next.phase = next.candidate ? 'writing' : 'planning'; next.selectedOutput = 'candidate';
+    next.evidenceRevision++; next.policyRevision++; next.revision++; return next;
+  } catch { return diagnose('invalid_fact_patch', 'Malformed candidate patch; prior facts retained.'); }
+}
+
+/** Explicit task use wins; never broaden anonymous permission into named publication. */
+export function claimPublicationUses(s: EditorialSession, subjectId: string): PermissionUse[] {
+  const uses = s.task.criteria.flatMap(c => c.rule.kind === 'permission' && c.rule.subjectIds.includes(subjectId) ? [{ channel: c.rule.channel ?? 'public', purpose: c.rule.use, identity: c.rule.identity ?? 'not_applicable' }] : []);
+  return uses.length ? uses : [{ channel: 'public', purpose: 'publication', identity: 'not_applicable' }];
 }

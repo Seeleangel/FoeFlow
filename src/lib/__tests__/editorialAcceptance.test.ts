@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createEditorialSession, hashText, type AcceptanceCriterion, type DraftArtifact, type EditorialSession, type EvidenceRef } from '../editorialTypes';
+import { parseContentBlocks } from '../editorialDocument';
 import { validateAcceptance } from '../editorialAcceptance';
 import { currentInputKey } from '../editorialState';
 function fixture() {
@@ -13,7 +14,7 @@ function fixture() {
   s.task.criteria = [c]; setBody(s, ['Monday at Studio.']); return { s, ref, c };
 }
 function setBody(s: EditorialSession, lines: string[], kinds: DraftArtifact['blocks'][number]['kind'][] = lines.map(() => 'paragraph')) {
-  const bodyMarkdown = lines.join('\n'); s.candidate = { schemaVersion: 2, id: 'd', revision: 1, title: 'Monday Studio', bodyMarkdown, contentHash: hashText('Monday Studio\n' + bodyMarkdown), blocks: lines.map((text, i) => ({ id: `b${i}`, kind: kinds[i], text })), origin: 'model', claimLinks: [], assets: [], editorialNotes: [] };
+  const bodyMarkdown = lines.map((line, i) => kinds[i] === 'heading' ? '## ' + line : line).join('\n'); s.candidate = { schemaVersion: 2, id: 'd', revision: 1, title: 'Monday Studio', bodyMarkdown, contentHash: hashText('Monday Studio\n' + bodyMarkdown), blocks: parseContentBlocks(bodyMarkdown), origin: 'model', claimLinks: [], assets: [], editorialNotes: [] };
 }
 describe('acceptance is task-specific and fail closed', () => {
   it('requires both facts in the first real body paragraph, never the title or adjacent blocks', () => {
@@ -23,11 +24,20 @@ describe('acceptance is task-specific and fail closed', () => {
     s.task.criteria = []; expect(validateAcceptance(s).blockers).not.toContain('lead');
   });
   it('checks the actual rendered paragraph and detects stale or altered HTML', () => {
-    const { s } = fixture(); const html = '<article><h1>Monday Studio</h1><p data-editorial-block="b0">Monday at Studio.</p></article>';
+    const { s } = fixture(); const html = `<article><h1>Monday Studio</h1><p data-editorial-block="${s.candidate!.blocks[0].id}">Monday at Studio.</p></article>`;
     const layout = { contentHash: s.candidate!.contentHash, themeId: 't', themeVersion: '1', html, htmlHash: hashText(html) };
     expect(validateAcceptance(s, layout).blockers).toEqual([]);
     const changed = '<article><h1>Monday Studio</h1><p data-editorial-block="b0">Monday</p><p>Studio</p></article>';
     expect(validateAcceptance(s, { ...layout, html: changed, htmlHash: hashText(changed) }).blockers.length).toBeGreaterThan(0);
+  });
+  it('rejects hidden paragraphs and unauthorized active/layout-only elements even when visible text hashes appear to match', () => {
+    const { s } = fixture(); const blockId = s.candidate!.blocks[0].id;
+    for (const extra of ['<img src="x" onerror="alert(1)">', '<script></script>']) {
+      const html = `<article><h1>Monday Studio</h1><p data-editorial-block="${blockId}">Monday at Studio.</p>${extra}</article>`;
+      expect(validateAcceptance(s, { contentHash: s.candidate!.contentHash, themeId: 't', themeVersion: '1', html, htmlHash: hashText(html) }).blockers).toContain('layout_integrity');
+    }
+    const html = `<article><h1>Monday Studio</h1><p style="display:none" data-editorial-block="${blockId}">Monday at Studio.</p></article>`;
+    expect(validateAcceptance(s, { contentHash: s.candidate!.contentHash, themeId: 't', themeVersion: '1', html, htmlHash: hashText(html) }).blockers).toContain('layout_integrity');
   });
   it('checks visible length and exact preserved blocks without counting title or markdown markup', () => {
     const { s, c } = fixture(); s.task.criteria = [{ ...c, id: 'len', rule: { kind: 'length', min: 14, max: 16, unit: 'visible_characters' } }, { ...c, id: 'keep', rule: { kind: 'preserve_blocks', blockHashes: [hashText('Monday at Studio.')] } }];

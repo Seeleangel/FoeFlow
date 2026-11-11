@@ -46,6 +46,7 @@ function patchTask(session: EditorialSession, raw: unknown, authority: 'model' |
     if (authority === 'template' && (p.criteria ?? []).some(c => session.task.criteria.some(old => old.origin === 'user' && (old.id === c.id || old.rule.kind === c.rule.kind)))) return reject();
     if (p.permittedOmissions) t.permittedOmissions = [...t.permittedOmissions, ...p.permittedOmissions];
     if (p.sourceWaivers) t.sourceWaivers = [...t.sourceWaivers, ...p.sourceWaivers];
+    if (stableJson(t) === stableJson(session.task)) return structuredClone(session);
     t.revision++; const checked = TaskContractSchema.parse(t);
     if (!checked.objective.trim() || !checked.intents.length || !checked.criteria.length && !checked.requirements.length && !checked.requiredSources.length) return reject();
     const allIds = [...t.requirements, ...t.requiredSources, ...t.criteria].map(item => item.id);
