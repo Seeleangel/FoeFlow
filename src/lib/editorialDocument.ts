@@ -56,7 +56,8 @@ export function writerSafeProjection<T>(s:EditorialSession,value:T):T {
 export function buildWriterContext(s: EditorialSession, repairCriterionIds: string[] = [], options:{instructions?:string;invalidArtifact?:boolean} = {}): WriterContext {
   const result = resolveFacts(s); const conflictScopes = new Set(result.conflicts.map(g => canonicalScopeId(s, g.selector.scopeId)));
   const claims = result.claims.filter(c => c.epistemic === 'supported' && c.visibility === 'public' && !conflictScopes.has(canonicalScopeId(s, c.selector.scopeId)) && !containsProtectedText(s, c.value) && [c.id, c.selector.scopeId].every(subject => !hasSubjectPermissions(s, subject) || claimPublicationUses(s, subject).every(use => permissionAllows(s, subject, use))));
-  const current = s.candidate && !containsProtectedText(s, s.candidate.title + s.candidate.bodyMarkdown) ? { title: s.candidate.title, bodyMarkdown: s.candidate.bodyMarkdown } : undefined;
+  const surface=s.candidate ?? (s.legacy?.text ? parseDraftArtifact(s.legacy.text,{id:'legacy-edit-surface',revision:0,legacyTitle:s.legacy.title||'Previous draft'}).artifact : undefined);
+  const current = surface && !containsProtectedText(s, surface.title + surface.bodyMarkdown) ? { title: surface.title, bodyMarkdown: surface.bodyMarkdown } : undefined;
   const repairs:WriterContext['repairTargets']=[];
   for(const id of repairCriterionIds) {const criterion=s.task.criteria.find(c=>c.id===id);if(criterion)repairs.push({id,category:'criterion',detail:'Satisfy this executable publication constraint.',rule:structuredClone(criterion.rule)});}
   for(const issue of s.review?.issues??[])if(issue.severity==='blocking')repairs.push({id:'review:'+issue.id,category:issue.category,detail:issue.detail.slice(0,2000),...(issue.span?{span:issue.span}:{})});
