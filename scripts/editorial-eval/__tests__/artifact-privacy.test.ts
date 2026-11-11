@@ -1,0 +1,18 @@
+import {it,expect,vi} from 'vitest';
+import {main,realModel} from '../run';
+import {redact} from '../replay';
+import {mkdtemp,readFile,writeFile} from 'node:fs/promises';
+it('fake real transport cannot persist known credential object keys, nested echoes or arbitrary usage metadata',async()=>{
+ const key='FAKE-UNIT-CREDENTIAL-Q9',d=await mkdtemp('.git/key-artifact-');const recipe=JSON.parse(await readFile('scripts/editorial-eval/fixtures/smoke-v2.recipe.json','utf8'));const responses=recipe.SAMPLE01.responses;delete recipe.SAMPLE01.responses;await writeFile(d+'/recipe.json',JSON.stringify(recipe));const stages=['preflight','decide','write','decide','review'];let call=0;const fetchSpy=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>{const stage=stages[call++];return new Response(JSON.stringify({id:'echo-'+key,choices:[{message:{content:responses[stage].shift()}}],usage:{prompt_tokens:10,total_tokens:12,[key]:1,nested:[{[key]:'echo '+key}]}}),{status:200})});const logs:string[]=[];const log=vi.spyOn(console,'log').mockImplementation(x=>logs.push(String(x)));
+ try{await main(['--real','--cases','scripts/editorial-eval/fixtures/smoke-v2.cases.jsonl','--recipe',d+'/recipe.json','--out',d+'/out'],{FOEFLOW_API_KEY:key});const raw=await readFile(d+'/out/SAMPLE01-1.json','utf8');expect(raw).not.toContain(key);expect(logs.join()).not.toContain(key);const result=JSON.parse(raw);expect(result.requests[0].usage).toEqual({prompt_tokens:10,total_tokens:12});expect(call).toBe(5)}finally{fetchSpy.mockRestore();log.mockRestore()}
+ const records:unknown[]=[];await realModel({apiUrl:'https://example.test',model:'m',temperature:.2,maxTokens:10,key},x=>records.push(x),async()=>new Response(JSON.stringify({choices:[{message:{content:'ok'}}],usage:{[key]:1,total_tokens:3,nested:{secret:key}}}),{status:200}))({stage:'preflight',data:{}},new AbortController().signal);expect(JSON.stringify(records)).not.toContain(key);
+});
+it('recursive redaction scrubs credential property names as well as escaped values and nested arrays',()=>{
+ const key='FAKE-KEY-"Q"';const x=redact({[key]:[{nested:JSON.stringify({[key]:key})}],ordinary:'visible'},[key]);expect(JSON.stringify(x)).not.toContain(JSON.stringify(key).slice(1,-1));expect(x.ordinary).toBe('visible');
+});
+it('parseable rejected note channels are protected without accepting the invalid artifact',async()=>{
+ const d=await mkdtemp('.git/rejected-note-');const c=JSON.parse(await readFile('scripts/editorial-eval/fixtures/smoke-v2.cases.jsonl','utf8'));c.input.operator_events=[];const r=JSON.parse(await readFile('scripts/editorial-eval/fixtures/smoke-v2.recipe.json','utf8'));r.SAMPLE01.actions=[];r.SAMPLE01.assertions=[];const draft=JSON.parse(r.SAMPLE01.responses.write[0]);draft.forbiddenExtra=true;draft.editorialNotes[0].text='REJECTED-NOTE-CHANNEL-SENTINEL';r.SAMPLE01.responses.write=[JSON.stringify(draft)];await writeFile(d+'/case.jsonl',JSON.stringify(c)+'\n');await writeFile(d+'/recipe.json',JSON.stringify(r));const log=vi.spyOn(console,'log').mockImplementation(()=>{});
+ try{await main(['--mock','--cases',d+'/case.jsonl','--recipe',d+'/recipe.json','--out',d+'/out'],{});const raw=await readFile(d+'/out/SAMPLE01-1.json','utf8');expect(raw).not.toContain('REJECTED-NOTE-CHANNEL-SENTINEL');expect(JSON.parse(raw).outcome.session.candidate).toBeUndefined();expect(raw).toContain('[REDACTED]')}finally{log.mockRestore()}
+});
+
+it('serialized sink refuses residual numeric credential bytes with a static safe error',async()=>{const {secureSerialize}=await import('../artifactSafety');expect(()=>secureSerialize({counter:123456789},[],['123456789'])).toThrow('artifact_secret_check_failed')});

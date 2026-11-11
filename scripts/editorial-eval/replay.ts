@@ -1,3 +1,4 @@
+import {rawNoteSpans} from './artifactSafety';
 import {applyEditorVerification} from '../../src/lib/editorialControls';
 import {validateAssertion,validateAssertions,type Assertion,type ExecutionLedger} from './observations';
 import {executionPlan,isAction,type ActionSource,type ApprovedCaseProtocol} from './authority';
@@ -40,13 +41,7 @@ export function sourcePortForCase(c:EvalCase):SourcePort {
  const docs=c.input.fixtures.map((f,i)=>({documentId:'doc-'+hashText(f.title+':'+i).slice(0,24),title:f.title,text:f.text,complete:true}));
  return {search:async(query,signal)=>{if(signal.aborted)throw new DOMException('cancelled','AbortError');const terms=query.toLocaleLowerCase().split(/\s+/).filter(Boolean);return docs.filter(d=>terms.some(t=>(d.title+' '+d.text).toLocaleLowerCase().includes(t))).map(d=>({documentId:d.documentId,title:d.title,snippet:d.text.slice(0,240),contentHash:hashText(d.text)}));},read:async(id,signal)=>{if(signal.aborted)throw new DOMException('cancelled','AbortError');return docs.find(d=>d.documentId===id)}};
 }
-export function redact<T>(value:T,secrets:string[]=[]):T {
- const clean=(v:unknown):unknown=>{
-  if(typeof v==='string'){let s=v;for(const secret of secrets.filter(Boolean).sort((a,b)=>b.length-a.length))for(const encoded of new Set([secret,JSON.stringify(secret).slice(1,-1)]))s=s.split(encoded).join('[REDACTED]');return s.replace(/Bearer\s+[A-Za-z0-9._~+/-]+/gi,'Bearer [REDACTED]');}
-  if(Array.isArray(v))return v.map(clean);
-  if(v&&typeof v==='object')return Object.fromEntries(Object.entries(v).map(([k,x])=>[k,/^(authorization|proxy-authorization|api[_-]?key|key|password|cookie|set-cookie|access[_-]?token)$/i.test(k)?'[REDACTED]':clean(x)]));return v;
- };return clean(value) as T;
-}
+export {redact} from './artifactSafety';
 export type EvalAction=({type:'message';text:string}|{type:'confirm'}|{type:'verify';criterionId:string}|{type:'waive';sourceRequirementId:string;reason:string}|{type:'select';output:'committed'|'candidate'|'legacy'}|{type:'cancel';afterCalls:number}|{type:'copy'|'save'|'word'})&{source?:ActionSource};
 export interface Recipe {initialSession?:EditorialSession;initialMessage?:string;actions?:EvalAction[];responses?:Record<string,ReplayReply[]>;assertions?:Assertion[]}
 export interface CaseResult {execution?:ExecutionLedger;restoration?:{phase:string;sessionHash:string;selectedOutput?:string};id:string;runId:string;trial:number;outcome?:EditorialOutcome;cancelled:boolean;error?:string;modelCalls:number;legacyModelCalls:number|null;trace:unknown[];outputs:unknown[];checkpoints:{hash:string;revision:number}[];privateSpans:string[];operatorPlanRequired:boolean;unappliedFollowups:number}
@@ -66,7 +61,7 @@ export async function runCase(c:EvalCase,o:RunCaseOptions):Promise<CaseResult>{
  const model:EditorialModelPort=async(req,signal)=>{
   r.modelCalls++;r.trace.push({type:'model_request',stage:req.stage,input:req.data});
   if(cancelAction?.type==='cancel'&&r.modelCalls>=cancelAction.afterCalls){complete(cancelIndex);abort.abort();throw new DOMException('cancelled','AbortError');}
-  const raw=await o.model(req,signal);r.trace.push({type:'model_response',stage:req.stage,raw,hash:hashText(raw)});return raw;
+  const raw=await o.model(req,signal);r.privateSpans.push(...rawNoteSpans(raw,req.stage));r.trace.push({type:'model_response',stage:req.stage,raw,hash:hashText(raw)});return raw;
  };
  const message=async(text:string)=>{
   if(abort.signal.aborted)throw new DOMException('cancelled','AbortError');session=invalidateEditorialStamps(session);const id='editor-'+session.evidence.length;

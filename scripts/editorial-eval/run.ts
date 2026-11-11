@@ -1,3 +1,4 @@
+import {secureSerialize,safeUsage} from './artifactSafety';
 import {validateAssertions} from './observations';
 import {executionPlan,parseApprovedProtocols,type ApprovedCaseProtocol} from './authority';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
@@ -7,7 +8,7 @@ import {EDITORIAL_STAGE_PROMPTS} from '../../src/lib/editorialPrompts';
 import {prepareAgentContext} from '../../src/lib/agentRuntime';
 import type {EditorialModelPort} from '../../src/lib/editorialController';
 import {DEFAULT_RUN_BUDGET} from '../../src/lib/editorialTypes';
-import {StageReplay,parseCaseFile,parseRecipes,replayQueues,runCase,unexecutedCase,redact,type Recipe} from './replay';
+import {StageReplay,parseCaseFile,parseRecipes,replayQueues,runCase,unexecutedCase,type Recipe} from './replay';
 import {caseMetrics,groupedMetrics} from './metrics';
 import {verifyHash,makeManifest,configSummary,type ModelConfig} from './manifest';
 export function realModel(config:ModelConfig,record:(meta:unknown)=>void,transport:typeof fetch=fetch):EditorialModelPort {
@@ -20,7 +21,7 @@ export function realModel(config:ModelConfig,record:(meta:unknown)=>void,transpo
   let body:{id?:string;choices?:{message?:{content?:string}}[];usage?:unknown};
   if(!response.ok){record({localRequestId,requestId,stage,parameters,sentAt,status:response.status});throw Error('HTTP_'+response.status);}
   try{body=await response.json()}catch{record({localRequestId,requestId,stage,parameters,sentAt,status:'invalid_response'});throw Error('invalid_model_response')}
-  record({localRequestId,requestId:requestId??body.id??null,responseId:body.id??null,stage,parameters,sentAt,status:response.status,usage:body.usage});
+  record({localRequestId,requestId:requestId??body.id??null,responseId:body.id??null,stage,parameters,sentAt,status:response.status,usage:safeUsage(body.usage)});
   const content=body.choices?.[0]?.message?.content;if(typeof content!=='string')throw Error('invalid_model_response');return content;
  };
 }
@@ -49,11 +50,11 @@ export async function main(args:string[],env:Record<string,string|undefined>=pro
  for(const c of selected)replayQueues(c,recipes[c.id]?.responses);
  const runId='editorial-'+randomUUID();const root=process.cwd();const out=resolve(String(a.out??join('.git','editorial-eval',runId)));
  await mkdir(dirname(out),{recursive:true,mode:0o700});await mkdir(out,{mode:0o700});
- const save=async(name:string,data:unknown,secrets:string[]=[])=>writeFile(join(out,name),JSON.stringify(redact(data,secrets),null,2)+'\n',{mode:0o600,flag:'wx'});
+ const save=async(name:string,data:unknown,secrets:string[]=[])=>writeFile(join(out,name),secureSerialize(data,secrets,[config.key??'']),{mode:0o600,flag:'wx'});
  const manifest=await makeManifest(root,casesHash,config,{runId,mode:a['dry-run']?'dry-run':a.mock?'mock':'real',caseFile:basename(casePath),selection:selected.map(c=>c.id),trials,recipeHash,protocolHash,stageParameters:{write:{temperature:config.temperature,maxTokens:8192},decide:{temperature:config.temperature,maxTokens:1500},other:{temperature:config.temperature,maxTokens:config.maxTokens}}});
  await save('manifest.json',manifest,[config.key??'']);
  const modelCallUpperBound=selected.reduce((sum,c)=>sum+trials*DEFAULT_RUN_BUDGET.modelCalls*(1+(recipes[c.id]?.actions?.filter(a=>a.type==='message').length??0)),0);
- if(a['dry-run']){const result={runId,mode:'dry-run',validated:all.length,selected:selected.length,trials,casesHash,networkCalls:0,modelCallUpperBound,needsOperatorRecipe:selected.filter(c=>c.input.initial_message===null||c.input.operator_events.length||c.input.followups.length).map(c=>c.id),config:configSummary(config)};await save('dry-run.json',result);console.log(JSON.stringify(result));return result;}
+ if(a['dry-run']){const result={runId,mode:'dry-run',validated:all.length,selected:selected.length,trials,casesHash,networkCalls:0,modelCallUpperBound,needsOperatorRecipe:selected.filter(c=>c.input.initial_message===null||c.input.operator_events.length||c.input.followups.length).map(c=>c.id),config:configSummary(config)};await save('dry-run.json',result);console.log(secureSerialize(result,[],[config.key??'']).trimEnd());return result;}
  const metrics=[];const allPrivateSpans:string[]=[];const abort=new AbortController();const stop=()=>abort.abort();process.once('SIGINT',stop);process.once('SIGTERM',stop);control.signal?.addEventListener('abort',stop,{once:true});if(control.signal?.aborted)abort.abort();
  try{
   for(const c of selected)for(let trial=1;trial<=trials;trial++){
@@ -65,5 +66,5 @@ export async function main(args:string[],env:Record<string,string|undefined>=pro
   }
  }finally{process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);control.signal?.removeEventListener('abort',stop);}
  const summary={runId,casesHash,...groupedMetrics(metrics),modelCallUpperBound};await save('summary.json',summary);
- await save('assertions.json',metrics,[config.key??'',...allPrivateSpans]);console.log(JSON.stringify(summary));return summary;
+ await save('assertions.json',metrics,[config.key??'',...allPrivateSpans]);console.log(secureSerialize(summary,[],[config.key??'']).trimEnd());return summary;
 }

@@ -114,3 +114,6 @@ These rules apply in dry-run validation before paid calls as well as runtime sco
 
 ## C-M3 editor verification behavior
 A source-bound `verify` action now uses the same trusted version-bound transition as Generator: record the human verdict, recompute `canHandoff` and only enter pending confirmation if the authoritative gate has no blockers. A following explicit `confirm` can then unlock copy/save/Word without a new message (which would invalidate the human verdict). No recipe schema change; wrong/stale criteria, denied assets and unread required sources still block.
+
+## C-M4 artifact safety
+Upstream usage is limited to nonnegative safe-integer `prompt_tokens`, `completion_tokens`, `total_tokens`; unknown/nested usage data is discarded. Redaction recursively covers property names and values, including parseable JSON-in-string and escaped representations. Rejected-but-parseable `editorialNotes` (and review note channels) join privacy spans before acceptance, without granting artifact/fact authority. Every file/stdout JSON sink performs a final serialized credential check and fails with a static safe code on any residue. Redacted raw JSON may be canonicalized; its original hash is retained. No recipe schema change.
