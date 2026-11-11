@@ -1,3 +1,4 @@
+import {executionPlan,parseApprovedProtocols,type ApprovedCaseProtocol} from './authority';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {resolve,dirname,join,basename} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -23,7 +24,7 @@ export function realModel(config:ModelConfig,record:(meta:unknown)=>void,transpo
  };
 }
 export function parseArgs(args:string[]){
- const flags=new Set(['dry-run','mock','real','allow-acceptance']);const values=new Set(['cases','sha256','select','out','trials','recipe','api-url','model','temperature','max-tokens']);const out:Record<string,string|boolean>={};
+ const flags=new Set(['dry-run','mock','real','allow-acceptance']);const values=new Set(['cases','sha256','select','out','trials','recipe','protocol','protocol-sha256','api-url','model','temperature','max-tokens']);const out:Record<string,string|boolean>={};
  for(let i=0;i<args.length;i++){const a=args[i];if(!a.startsWith('--'))throw Error('invalid_arguments');const key=a.slice(2);if(flags.has(key)){out[key]=true;continue;}if(!values.has(key)||!args[i+1]||args[i+1].startsWith('--'))throw Error('invalid_arguments');out[key]=args[++i];}
  if(!out.cases)throw Error('cases_required');const modes=['dry-run','mock','real'].filter(k=>out[k]);if(modes.length!==1)throw Error('choose_one_mode');return out;
 }
@@ -40,12 +41,15 @@ export async function main(args:string[],env:Record<string,string|undefined>=pro
  // Recipes are separate, hash-frozen assets; original case bytes are never modified.
  let recipes:Record<string,Recipe>={};let recipeHash:string|undefined;
  if(a.recipe){const recipePath=resolve(String(a.recipe));if(!a['allow-acceptance']&&/[/\\](blind[^/\\]*|sealed)[/\\]/i.test(recipePath))throw Error('acceptance_assets_require_explicit_mode');const raw=await readFile(recipePath);recipeHash=verifyHash(raw);recipes=parseRecipes(JSON.parse(raw.toString('utf8')));}
+ let protocols:Record<string,ApprovedCaseProtocol>={};let protocolHash:string|undefined;
+ if(a.protocol){if(!a['allow-acceptance']||typeof a['protocol-sha256']!=='string')throw Error('approved_protocol_requires_explicit_mode_and_hash');const raw=await readFile(resolve(String(a.protocol)));protocolHash=verifyHash(raw,a['protocol-sha256']);protocols=parseApprovedProtocols(JSON.parse(raw.toString('utf8')),casesHash);}
+ for(const c of selected)executionPlan(c,recipes[c.id],protocols[c.id]);
  if(a.real&&selected.some(c=>(c.input.initial_message===null||c.input.followups.length||c.input.operator_events.length)&&!recipes[c.id]?.actions))throw Error('operator_recipe_required');
  for(const c of selected)replayQueues(c,recipes[c.id]?.responses);
  const runId='editorial-'+randomUUID();const root=process.cwd();const out=resolve(String(a.out??join('.git','editorial-eval',runId)));
  await mkdir(dirname(out),{recursive:true,mode:0o700});await mkdir(out,{mode:0o700});
  const save=async(name:string,data:unknown,secrets:string[]=[])=>writeFile(join(out,name),JSON.stringify(redact(data,secrets),null,2)+'\n',{mode:0o600,flag:'wx'});
- const manifest=await makeManifest(root,casesHash,config,{runId,mode:a['dry-run']?'dry-run':a.mock?'mock':'real',caseFile:basename(casePath),selection:selected.map(c=>c.id),trials,recipeHash,stageParameters:{write:{temperature:config.temperature,maxTokens:8192},decide:{temperature:config.temperature,maxTokens:1500},other:{temperature:config.temperature,maxTokens:config.maxTokens}}});
+ const manifest=await makeManifest(root,casesHash,config,{runId,mode:a['dry-run']?'dry-run':a.mock?'mock':'real',caseFile:basename(casePath),selection:selected.map(c=>c.id),trials,recipeHash,protocolHash,stageParameters:{write:{temperature:config.temperature,maxTokens:8192},decide:{temperature:config.temperature,maxTokens:1500},other:{temperature:config.temperature,maxTokens:config.maxTokens}}});
  await save('manifest.json',manifest,[config.key??'']);
  const modelCallUpperBound=selected.reduce((sum,c)=>sum+trials*DEFAULT_RUN_BUDGET.modelCalls*(1+(recipes[c.id]?.actions?.filter(a=>a.type==='message').length??0)),0);
  if(a['dry-run']){const result={runId,mode:'dry-run',validated:all.length,selected:selected.length,trials,casesHash,networkCalls:0,modelCallUpperBound,needsOperatorRecipe:selected.filter(c=>c.input.initial_message===null||c.input.operator_events.length||c.input.followups.length).map(c=>c.id),config:configSummary(config)};await save('dry-run.json',result);console.log(JSON.stringify(result));return result;}
@@ -54,7 +58,7 @@ export async function main(args:string[],env:Record<string,string|undefined>=pro
   for(const c of selected)for(let trial=1;trial<=trials;trial++){
    if(abort.signal.aborted)break;const recipe=recipes[c.id];const queues=replayQueues(c,recipe?.responses);const q=new StageReplay(queues.effective);const requests:unknown[]=[];
    const model=a.mock?q.call:realModel(config,meta=>requests.push(meta));
-   const r=await runCase(c,{mode:a.mock?'mock':'real',model,runId,trial,recipe,signal:abort.signal});
+   const r=await runCase(c,{mode:a.mock?'mock':'real',model,runId,trial,recipe,approvedProtocol:protocols[c.id],signal:abort.signal});
    const m=caseMetrics(c,r,recipe);metrics.push(m);const secrets=[config.key??'',...r.privateSpans];allPrivateSpans.push(...r.privateSpans);
    await save(c.id+'-'+trial+'.json',{...r,privateSpans:undefined,requests,queueEvidence:{originalHashes:queues.originalHashes,effectiveHashes:queues.effectiveHashes,consumed:a.mock?q.consumed:null},remaining:a.mock?q.remaining():undefined,metrics:m},secrets);
   }

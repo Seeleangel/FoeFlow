@@ -8,7 +8,7 @@ Choose exactly one: `--dry-run`, `--mock`, or `--real`. There is no network fall
 
 `--real` is an explicit paid/network execution opt-in for the acceptance operator. Credentials are read **only from the inherited `FOEFLOW_API_KEY` (or `OPENAI_API_KEY`) environment**. Configure that environment through your existing secure workflow; do not put secrets in arguments, case files, recipes or source. The CLI deliberately does not scrape a browser/native settings database. `FOEFLOW_API_URL` and `FOEFLOW_MODEL` supply the existing endpoint/model configuration. HTTPS endpoints with userinfo, query or fragment are rejected. No POST retry. All stages use temperature 0.2 by default; token limits are write=8192, decide=1500, other=6000. CLI overrides and exact per-request values are recorded. No real call was made during implementation.
 
-Historical H and blind/sealed paths require `--allow-acceptance`; development selection defaults to non-H cases. Do not use that flag during implementation. The supplied v0.4 original file is schema/hash validated as a whole, but unselected cases never enter the agent/model. Do not copy original cases into this repository. `fixtures/smoke-v1.*` are independently authored, versioned harness self-tests, not replacements for the original corpus.
+Historical H and blind/sealed paths require `--allow-acceptance`; development selection defaults to non-H cases. Do not use that flag during implementation. The supplied v0.4 original file is schema/hash validated as a whole, but unselected cases never enter the agent/model. Do not copy original cases into this repository. `fixtures/smoke-v2.*` are independently authored, versioned harness self-tests, not replacements for the original corpus.
 
 ## Commands
 
@@ -23,7 +23,7 @@ npm run editorial:eval -- --dry-run --cases "$CASES" --sha256 "$SHA" --select 'R
 # No network: original R01–R15 module/operator replays plus selected old-effect mocks.
 npm run editorial:regression
 # No network: independent CLI self-test through the real controller, confirmation and output adapters.
-npm run editorial:eval -- --mock --cases scripts/editorial-eval/fixtures/smoke-v1.cases.jsonl --recipe scripts/editorial-eval/fixtures/smoke-v1.recipe.json
+npm run editorial:eval -- --mock --cases scripts/editorial-eval/fixtures/smoke-v2.cases.jsonl --recipe scripts/editorial-eval/fixtures/smoke-v2.recipe.json
 # UI smoke (all remote routes intercepted, no real service):
 npm run dev:web -- --host 127.0.0.1 --port 5189 --strictPort
 FOEFLOW_UI_URL=http://127.0.0.1:5189/foeflow/ npm run test:editorial-ui
@@ -47,9 +47,8 @@ Cases without conditional followups/operator actions do not need a recipe. A rea
 ## Recipe and assertions
 
 JSON object keyed by case ID, each entry:
-- `initialSession`: optional runtime-schema-validated state for historical product cases; never supplied to a model as a raw case object.
-- `initialMessage`: optional editor message for a null initial message.
-- `actions`: explicit ordered editor `message{text}`, `confirm`, `verify{criterionId}`, `waive{sourceRequirementId,reason}`, `select{output}`, `copy`, `save`, `word`; `cancel{afterCalls}` deterministically aborts dispatch at that attempt. These are operator authority, not model tools.
+- `initialSession` and `initialMessage` are **forbidden in recipes**. Reviewed historical setup moves to a separately hash-pinned approval protocol (below).
+- `actions`: source-bound ordered editor `message{text}`, `confirm`, `verify{criterionId}`, `waive{sourceRequirementId,reason}`, `select{output}`, `copy`, `save`, `word`; `cancel{afterCalls}` deterministically aborts dispatch at that attempt. These are operator authority, not model tools.
 - `responses`: mock-only stage arrays. A string is a model response; `{error:"HTTP_502"}` injects a transport failure. Unknown stages/invalid recipes are rejected.
 - `assertions`: frozen mechanical checks `{checkId,path,op,value}`; `op` is equals/includes/not_includes/nonempty over the **actual** CaseResult. See the independently authored smoke recipe for a complete example.
 
@@ -71,3 +70,32 @@ npx tsc -p scripts/editorial-eval/tsconfig.json
 
 ## C-M2 queue-integrity update
 Supplementary `responses` may name only stages absent from the original frozen case. **Any overlap is rejected as `fixture_stage_collision` before any model request**, including identical responses or empty arrays. Remove overlapping recipe stages; never clean the original fault. Case artifacts record original/effective per-stage SHA-256 plus actual mock consumption and leftovers. No recipe action schema change in this update.
+
+## C-B2 authority schema migration (required before scored runs)
+
+Recipe entries keep `responses`, `assertions`, and `actions`; any other top-level recipe field is rejected. Remove recipe `initialMessage` / `initialSession`. Every action now includes `source`:
+
+```json
+{"type":"message","text":"exact original followup","source":{"kind":"followup","index":0}}
+{"type":"confirm","source":{"kind":"operator","index":2}}
+{"type":"verify","criterionId":"human-check","source":{"kind":"protocol","step":"review-verdict"}}
+```
+
+- `followup.index` is zero-based in the **original frozen** `input.followups`; action must be exactly that message. A new message is not a substitute for an unrelated followup.
+- `operator.index` is zero-based in original `operator_events`. It must already be structured as `{ "kind":"editor_action", "action":{...} }`; recipe payload must equal the frozen action. Stage-response objects are not editor actions. Natural-language scripts are not auto-interpreted.
+- `protocol.step` must exactly match a separately reviewed protocol step. Recipe assertions cannot grant editorial authority. Reusing a source step twice is rejected.
+- A non-null original editor message is **always used exactly**; even a protocol cannot replace it.
+
+For historical setup / prose-script translation, acceptance must obtain independent approval of a separate protocol **and its SHA-256** before running. `approvedBy`/`approvalRef` are audit metadata, not self-approval: the trusted CLI operator must verify that the supplied hash is the independently approved version. Do not copy recipe assertions into protocol/editor messages. Protocol format:
+
+```json
+{"schemaVersion":1,"caseFileSha256":"<exact frozen input-file SHA>",
+ "approvedBy":"independent acceptance editor","approvalRef":"reviewed protocol reference",
+ "cases":{"CASE_ID":{"caseSha256":"<SHA-256 of stableJson(parsed original case)>",
+   "kind":"historical","initialSession":{},"initialMessage":"only permitted if frozen message is null",
+   "steps":{"review-verdict":{"type":"verify","criterionId":"human-check"}}}}}
+```
+
+`initialSession` must satisfy EditorialSessionSchema; the `{}` above is a shape placeholder, not a valid state. `kind` is `agent`, `historical`, or `restoration`; only historical/restoration may initialize state. Restoration requires null original message and a valid initial session. Omit `initialMessage` for non-null original messages. New CLI options `--protocol /path/to/approved.json --protocol-sha256 <approved-bytes-SHA>` require `--allow-acceptance`, including for dry-run. Full file SHA and individual case hashes are checked before dispatch; protocol hash/provenance are recorded. Example commands above that need setup or prose actions must append these options. A recipe path/hash alone never authorizes them.
+
+`smoke-v2.*` independently freezes its editor actions in the synthetic case and adds sources to its recipe. `smoke-v1.*` bytes are retained for historical evidence but their unbound action recipe is no longer executable. Original evaluation case bytes remain unchanged.
