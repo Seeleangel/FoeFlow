@@ -217,8 +217,10 @@ export async function runEditorialController(options: ControllerOptions): Promis
         const source = s.task.requiredSources.find(source => source.id === action.sourceRequirementId);
         if (!source || attemptedRequired.has(source.id)) toolResult('read', 'no_progress', 'required_read_already_attempted'); else await performRead(source.id);
       } else if (action.tool === 'ask') {
-        if (action.gapIds.length) { const question = buildQuestion(s, action.gapIds); emit([{ type: 'question_recorded', question }]); toolResult('ask', 'progress', 'waiting_editor'); return { type: 'question', session: s, question }; }
-        toolResult('ask', 'rejected', 'no_selected_gap');
+        if (action.gapIds.length) {
+          try { const question=buildQuestion(s,action.gapIds);emit([{type:'question_recorded',question}]);toolResult('ask','progress','waiting_editor');return {type:'question',session:s,question}; }
+          catch(error) { const code=error instanceof Error && ['invalid_gap_selection','awaiting_editor_reply'].includes(error.message)?error.message:'invalid_gap_selection';toolResult('ask','rejected','ask_selection_rejected:'+code); }
+        } else toolResult('ask','rejected','no_selected_gap');
       } else if (action.tool === 'write') {
         const repairs = s.candidate ? canHandoff(s).blockers.filter(id => !['candidate','review_current','layout_current'].includes(id)).sort() : lastWriteFailure ? [lastWriteFailure] : [];
         const feedback=s.review??repairReview;
