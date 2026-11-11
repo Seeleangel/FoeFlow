@@ -1,4 +1,5 @@
 import { DraftArtifactSchema, artifactContentHash, hashText, stableJson, type EditorialSession, type DraftArtifact, type ContentBlock, type Diagnostics, type EditorialNote, type FactSelector, type PublicDocument, type CriterionRule } from './editorialTypes';
+import { validateAcceptance } from './editorialAcceptance';
 import { claimPublicationUses, permissionAllows, resolveFacts, canonicalScopeId, hasSubjectPermissions } from './editorialFacts';
 /** v1 line semantics are intentional: a single newline creates a new body paragraph. */
 export function parseContentBlocks(bodyMarkdown: string): ContentBlock[] {
@@ -41,6 +42,8 @@ export interface WriterContext {
   claims: { id: string; selector: Omit<FactSelector, 'cardinalityRefs'>; value: string; evidenceIds: string[] }[];
   constraints: { id: string; kind: string; rule: CriterionRule; relatedIds: string[] }[];
   currentDraft?: { title: string; bodyMarkdown: string }; repairCriterionIds: string[];
+  instructions?: string;
+  repairTargets: {id:string;category:string;detail:string;span?:{blockId:string;start:number;end:number};rule?:CriterionRule}[];
   assetSlots: { assetId: string; slotId: string; state: 'omitted' | 'placeholder' | 'included' }[];
 }
 /** All writer strings are bounded and scrubbed of known restricted values and note-channel text. */
@@ -50,14 +53,21 @@ export function writerSafeProjection<T>(s:EditorialSession,value:T):T {
  return safe(value) as T;
 }
 /** No conversation, raw enclosing quotes, internal notes or unfiltered evidence enters writer input. */
-export function buildWriterContext(s: EditorialSession, repairCriterionIds: string[] = []): WriterContext {
+export function buildWriterContext(s: EditorialSession, repairCriterionIds: string[] = [], options:{instructions?:string;invalidArtifact?:boolean} = {}): WriterContext {
   const result = resolveFacts(s); const conflictScopes = new Set(result.conflicts.map(g => canonicalScopeId(s, g.selector.scopeId)));
   const claims = result.claims.filter(c => c.epistemic === 'supported' && c.visibility === 'public' && !conflictScopes.has(canonicalScopeId(s, c.selector.scopeId)) && !containsProtectedText(s, c.value) && [c.id, c.selector.scopeId].every(subject => !hasSubjectPermissions(s, subject) || claimPublicationUses(s, subject).every(use => permissionAllows(s, subject, use))));
   const current = s.candidate && !containsProtectedText(s, s.candidate.title + s.candidate.bodyMarkdown) ? { title: s.candidate.title, bodyMarkdown: s.candidate.bodyMarkdown } : undefined;
+  const repairs:WriterContext['repairTargets']=[];
+  for(const id of repairCriterionIds) {const criterion=s.task.criteria.find(c=>c.id===id);if(criterion)repairs.push({id,category:'criterion',detail:'Satisfy this executable publication constraint.',rule:structuredClone(criterion.rule)});}
+  for(const issue of s.review?.issues??[])if(issue.severity==='blocking')repairs.push({id:'review:'+issue.id,category:issue.category,detail:issue.detail.slice(0,2000),...(issue.span?{span:issue.span}:{})});
+  for(const [i,detail] of (s.review?.blocking??[]).entries())repairs.push({id:'review:blocking:'+i,category:'review',detail:detail.slice(0,2000)});
+  for(const diagnostic of validatePublicArtifact(s))repairs.push({id:'diagnostic:'+diagnostic.code,category:'public_projection',detail:diagnostic.message.slice(0,2000)});
+  for(const check of validateAcceptance(s).checks)if(check.status!=='pass')repairs.push({id:check.criterionId,category:'acceptance',detail:check.detail.slice(0,2000)});
+  if(options.invalidArtifact)repairs.push({id:'invalid_artifact',category:'format',detail:'Return only title, bodyMarkdown, editorialNotes, assets and claimLinks, with a nonempty public article. Extra fields or invalid markup are not accepted.'});
   return writerSafeProjection(s, { objective: containsProtectedText(s, s.task.objective) ? 'Prepare the public article using the approved claims and constraints.' : s.task.objective,
     intents: [...s.task.intents], claims: claims.map(c => ({ id: c.id, selector: { scopeId:c.selector.scopeId, predicate:c.selector.predicate, ...(c.selector.metric?{metric:structuredClone(c.selector.metric)}:{}), ...(c.selector.cardinality?{cardinality:c.selector.cardinality}:{}) }, value: c.value, evidenceIds: [...new Set(c.refs.map(r => r.evidenceId))] })),
     constraints: s.task.criteria.map(c => ({ id: c.id, kind: c.rule.kind, rule: c.rule.kind === 'semantic' && containsProtectedText(s, c.rule.instruction) ? { kind: 'semantic', instruction: 'Follow the public task constraints without disclosing restricted material.' } : structuredClone(c.rule), relatedIds: c.rule.kind === 'include_facts' || c.rule.kind === 'exclude_claims' ? [...c.rule.factIds] : c.rule.kind === 'permission' ? [...c.rule.subjectIds] : [] })),
-    currentDraft: current, repairCriterionIds: repairCriterionIds.filter(id => s.task.criteria.some(c => c.id === id)), assetSlots: s.candidate?.assets.map(a => ({ assetId: a.assetId, slotId: a.slotId, state: a.state })) ?? [] });
+    currentDraft: current, instructions:options.instructions?.slice(0,2000), repairTargets:repairs.slice(0,48), repairCriterionIds:[...new Set([...repairCriterionIds,...repairs.map(r=>r.id)])].slice(0,64), assetSlots: s.candidate?.assets.map(a => ({ assetId: a.assetId, slotId: a.slotId, state: a.state })) ?? [] });
 }
 /** Safe sidebar summaries are separate from the public document and the full local evidence. */
 export function summarizeEditorialNotes(s: EditorialSession): EditorialNote[] {

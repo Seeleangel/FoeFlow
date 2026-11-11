@@ -216,7 +216,7 @@ export async function runEditorialController(options: ControllerOptions): Promis
         } else if (writeKeys.has(key)) {
           toolResult('write', 'no_progress', 'write_idempotency_hit'); if (s.candidate && !s.review) { await review(); const ready = finish(); if (ready) return ready; }
         } else {
-          writeKeys.add(key); used.writes++; const rawDraft = await ask('write', buildWriterContext(s, repairs) as unknown as Record<string, unknown>);
+          writeKeys.add(key); used.writes++; const rawDraft = await ask('write', buildWriterContext(s, repairs, {instructions:action.instructions,invalidArtifact:!!lastWriteFailure}) as unknown as Record<string, unknown>);
           let parsed = parseDraftArtifact(rawDraft, { id: 'candidate', revision: (s.candidate?.revision ?? 0) + 1 });
           if (!parsed.artifact && !repairUsed && /^[{`]/.test(rawDraft.trim())) { try { parseJsonObject(rawDraft); } catch { repairUsed = true; parsed = parseDraftArtifact(await ask('repair', { stage: 'write', invalidResponse: rawDraft }), { id: 'candidate', revision: (s.candidate?.revision ?? 0) + 1 }); } }
           if (!parsed.artifact) { lastWriteFailure = 'invalid_artifact'; toolResult('write', 'rejected', 'invalid_artifact'); }
