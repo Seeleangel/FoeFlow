@@ -61,3 +61,16 @@ FoeFlow 采用这些分层思路，运行代码自行实现，继续使用当前
 254 项自动测试通过，包含 HTTP 中止、空/截断返回、轮次限制、重复结果、无效字段、取消后迟到响应、任务替代和卸载。原生 Mac 测试副本使用本地模拟模型接口，验证需求→分析→写作反馈修订→排版反馈修订，以及停止后无结果写回、精修失败保留预览；不使用生产 API 密钥或修改用户的设置。
 
 这些测试验证机制和状态一致性，不证明真实模型的文章质量提升。真实 AI 与邮箱账号的完整业务验收仍需在用户配置的服务上完成。Mac 分发仍采用 ad-hoc 签名，未 Apple 公证。
+
+
+## Editorial v2 contracts (WP00, local phase A)
+
+The shared runtime schemas and types live in `src/lib/editorialTypes.ts`; all model/tool input is `unknown` until parsed. `editorialState.ts` owns revisions, immutable tool-event batches and the separate editor-control entry. A batch has one expectedRevision; cancelled/run/session mismatches reject the entire batch. All content/evidence/task/permission changes invalidate current review/layout/gate/human stamps, never the committed snapshot. Confirmation requires same inputKey and htmlHash and is applied only after `persistConfirmation` succeeds. UI ownership must be rechecked after asynchronous persistence (WP07).
+
+`editorialCompatibility.ts` migrates at read time without rewriting storage. A v1 confirmed record is an exact historical snapshot, not a v2 gate pass. Manual records remain explicitly legacy-manual; invalid v2/corrupt records never acquire confirmation.
+
+Frozen additions to plan sketches: `TaskContract.sourceWaivers`, `EditorialSession.alignments`, `diagnostics`, `humanVerifications`, `legacy`, `selectedOutput`; `ReadReceipt.sourceRequirementId` is optional for old callers. `PermissionUse` is channel/purpose/identity, not just an asset boolean. Hashes are portable SHA-256. Scopes, facts and permissions are candidate data until WP01 resolution. Task changes must go through WP02's evidence-backed patch port before emitting task_revised. Human decisions are control events, never tool events.
+
+Verified repository dependencies: npm/package-lock, installed Vitest 4.1.4/TypeScript 5.7; tests `./node_modules/.bin/vitest run`, typecheck `./node_modules/.bin/tsc -b`, lint `npm run lint`. Tests live in both `tests/` and `src/lib/__tests__/`. HTML currently renders each nonempty source line as a separate block; Word takes string[]. articleSearch returns title/snippet only, libraryStorage retains full article IDs/content; source receipts need a WP05 adapter. Generator/draft storage use SQL `generated_drafts` and v1 JSON; WP07 owns storage integration. Existing agentRuntime cancellation/120s HTTP paths are unchanged.
+
+Baseline 2026-11-11 Asia/Shanghai: 46 test files, 265 tests pass; tsc -b passes; lint has 47 errors/9 warnings (including generated src-tauri target files), unchanged work must not increase these. No real-model requests are part of phase A.
