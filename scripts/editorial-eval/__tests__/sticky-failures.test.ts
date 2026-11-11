@@ -35,3 +35,10 @@ it('service failures remain failed trials even when the product recovers on a la
 it('a later cancellation does not downgrade an earlier fixture error',async()=>{
  const c=frozen(),s=await wire();c.input.operator_events=[{kind:'editor_action',action:{type:'cancel',afterCalls:5}}];const recipe:Recipe={actions:[followup(c),{type:'cancel',afterCalls:5,source:{kind:'operator',index:0}}],assertions:[{checkId:'draft',path:'cancelled',op:'equals',value:true}]};const q=new StageReplay({preflight:[s.preflight[0]],decide:[s.decide[0]],write:['{']});const r=await runCase(c,{mode:'mock',model:q.call,runId:'cancel-after-fixture',trial:1,recipe});expect(r.cancelled).toBe(true);expect(caseMetrics(c,r,recipe).status).toBe('fixture_error');
 });
+
+it.each([false,true])('port abort without editor cancellation stays an infrastructure failure after recovery, internal deadline=%s',async deadline=>{
+ const c=frozen(),s=await wire(),recipe:Recipe={actions:[followup(c)],assertions:[{checkId:'draft',path:'outcome.type',op:'equals',value:'draft'}]},q=new StageReplay(s);let first=true;
+ const r=await runCase(c,{mode:'mock',runId:'port-abort',trial:1,recipe,budget:{maxElapsedMs:250},model:async(req,signal)=>{
+  if(first){first=false;if(deadline)await new Promise<never>((_,reject)=>{if(signal.aborted)reject(new DOMException('internal abort','AbortError'));else signal.addEventListener('abort',()=>reject(new DOMException('internal abort','AbortError')),{once:true});});throw new DOMException('port abort','AbortError');}return q.call(req,signal);
+ }});expect(r.outcome?.type).toBe('draft');expect(r.cancelled).toBe(false);expect(caseMetrics(c,r,recipe).status).toBe('FAIL');expect(r.modelFailures).toContainEqual(expect.objectContaining({kind:'service',code:'model_port_aborted'}));
+});

@@ -65,8 +65,8 @@ export async function runCase(c:EvalCase,o:RunCaseOptions):Promise<CaseResult>{
   if(cancelAction?.type==='cancel'&&r.modelCalls>=cancelAction.afterCalls){complete(cancelIndex);abort.abort();throw new DOMException('cancelled','AbortError');}
   try{const raw=await o.model(req,signal);r.privateSpans.push(...rawNoteSpans(raw,req.stage));r.trace.push({type:'model_response',stage:req.stage,raw,hash:hashText(raw)});return raw;}
   catch(error){
-   const message=error instanceof Error?error.message:'';const fixture=message.startsWith('fixture_error:');const cancelled=!fixture&&(signal.aborted||error instanceof Error&&error.name==='AbortError');
-   const code=fixture?'fixture_error:'+req.stage:cancelled?'cancelled':/^HTTP_[1-5][0-9]{2}$/.test(message)||['network_error','invalid_model_response'].includes(message)?message:'model_port_failed';
+   const message=error instanceof Error?error.message:'';const fixture=message.startsWith('fixture_error:');const cancelled=!fixture&&abort.signal.aborted;const portAborted=signal.aborted||!!error&&typeof error==='object'&&'name'in error&&error.name==='AbortError';
+   const code=fixture?'fixture_error:'+req.stage:cancelled?'cancelled':portAborted?'model_port_aborted':/^HTTP_[1-5][0-9]{2}$/.test(message)||['network_error','invalid_model_response'].includes(message)?message:'model_port_failed';
    const failure:ModelFailure={stage:req.stage,turn,attempt:r.modelCalls,kind:fixture?'fixture':cancelled?'cancelled':'service',code};r.modelFailures!.push(failure);r.trace.push({type:'model_failure',...failure});
    if(!cancelled)r.error??=code;
    if(cancelled)throw new DOMException('cancelled','AbortError');throw Error(code);
