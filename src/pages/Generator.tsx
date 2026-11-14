@@ -6,10 +6,12 @@ import { downloadBlob } from '@/lib/browserImage';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAgentRun } from '@/hooks/useAgentRun';
 import { useEditorialSession } from '@/hooks/useEditorialSession';
-import { assertConfirmable } from '@/lib/editorialState';
-import { currentInputKey, hashText, type EditorialSession } from '@/lib/editorialTypes';
+import { assertConfirmable, deferGaps } from '@/lib/editorialState';
+import { currentInputKey, hashText, type EditorialOutcome, type EditorialSession } from '@/lib/editorialTypes';
 import { editorialPreviewFields, requireConfirmedOutput, exportPublicDocumentToDocx } from '@/lib/editorialOutput';
-import { formatQuestion } from '@/lib/editorialGaps';
+import { formatQuestionBubble } from '@/lib/editorialGaps';
+import { planStopAction } from '@/lib/editorialStopActions';
+import type { AnswerChoice, StopAction } from '@/lib/editorialTypesV3';
 import { resolveEditorDiagnostic } from '@/lib/editorialFacts';
 import { applyEditorTaskPatch } from '@/lib/editorialTask';
 import { editorialStopExplanation } from '@/lib/editorialStatus';
@@ -67,6 +69,7 @@ export default function Generator() {
   const [editorial, setEditorial] = useState<EditorialHandoff>();
   const [editorialProgress, setEditorialProgress] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [questionNotice, setQuestionNotice] = useState('');
   const confirmationInFlight = useRef(false);
   const sessionChanging = useRef(false);
   const { begin: beginChatRun, cancel: cancelChatRun } = useAgentRun();
@@ -141,6 +144,7 @@ export default function Generator() {
   const [session, setSession] = useState<string>(`generator_${Date.now()}`);
   const editorialState = useEditorialSession(session);
   const editorialSession = editorialState.session;
+  const activeQuestionBatch = editorialSession?.activeBatchId ? editorialSession.questionBatches?.find(batch => batch.id === editorialSession.activeBatchId && batch.status === 'active') : undefined;
   const [persistenceConflict,setPersistenceConflict]=useState(false);
   const makePersistence=(id:string,base?:PersistedSessionBase)=>createSessionPersistence(id,base,()=>{setPersistenceConflict(true);cancelChatRun();setLoading(false);});
   const persistenceRef=useRef<ReturnType<typeof createSessionPersistence>|null>(null);
@@ -150,6 +154,8 @@ export default function Generator() {
   const sessionRef = useRef(session);
   sessionRef.current = session;
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const chatMessagesRef = useRef(chatMessages);
+  chatMessagesRef.current = chatMessages;
   const autoLayoutRef = useRef(false);
   // Hold latest styleSpec/selectedDirection in refs so the feedback guard
   // never fails due to stale React state (e.g. after session load or reset).
@@ -334,9 +340,21 @@ export default function Generator() {
     return [nonArticle, article];
   };
 
-  const handleChatSend = async () => {
+  /** Shared result mapping for chat sends and retries: no evidence or user bubble is added here. */
+  const applyEditorialResult = (result: EditorialOutcome, baseMessages: ChatMessage[]) => {
+    setQuestionNotice(result.type === 'question' ? result.notice ?? '' : '');
+    if (result.type === 'draft') {
+      setLayoutStrategy(null); reset();
+      setEditorial({ status: 'pending', notes: [], sources: [] });
+    }
+    const content = result.type === 'question' ? formatQuestionBubble(result.question) : editorialStopExplanation(result.session);
+    setChatMessages([...baseMessages, { role: 'assistant', content, timestamp: new Date() }]);
+  };
+
+  const handleChatSend = async (overrideText?: unknown) => {
     if (sessionChanging.current || confirmationInFlight.current || loading || articlePipelineLoading || layoutStage === 'generating' || specLoading) return;
-    const rawText = chatInput.trim() || lastUserInputRef.current;
+    const questionPayload = overrideText && typeof overrideText === 'object' && 'batchId' in overrideText ? overrideText as { batchId: string; slots: { gapId: string; optionId?: string; value?: string; choice?: AnswerChoice }[]; text: string; bubbleText?: string } : undefined;
+    const rawText = (questionPayload?.text ?? (typeof overrideText === 'string' ? overrideText : chatInput)).trim() || lastUserInputRef.current;
     if (!rawText) return;
     const chatRun = beginChatRun();
     try {
@@ -424,7 +442,7 @@ export default function Generator() {
 
       const latestMessage = chatMessages[chatMessages.length - 1];
       const retrying = !chatInput.trim() && latestMessage?.role === 'user' && latestMessage.content === text;
-      const newUserMessage: ChatMessage = { role: 'user', content: text, timestamp: new Date() };
+      const newUserMessage: ChatMessage = { role: 'user', content: questionPayload?.bubbleText?.trim() || text, timestamp: new Date() };
       const newMessages = retrying ? chatMessages : [...chatMessages, newUserMessage];
       setChatMessages(newMessages);
       setChatInput('');
@@ -433,7 +451,7 @@ export default function Generator() {
       if (creationMode === 'agent') {
         try {
           const messageId = 'message-' + (retrying ? latestMessage.timestamp : newUserMessage.timestamp).getTime() + '-' + newMessages.length;
-          editorialState.appendMessage(text, messageId);
+          editorialState.appendMessage(text, messageId, questionPayload ? { replyToBatchId: questionPayload.batchId, slots: questionPayload.slots } : undefined);
           const owner = editorialState.begin();
           const targetSession = sessionRef.current,writer=persistenceRef.current!;
           const isCurrent = () => chatRun.isCurrent() && owner.isCurrent() && persistenceRef.current===writer && !writer.hasConflict() && sessionRef.current === targetSession;
@@ -446,12 +464,7 @@ export default function Generator() {
           });
           if (!isCurrent()) return;
           owner.checkpoint(result.session);
-          if (result.type === 'draft') {
-            setLayoutStrategy(null); reset();
-            setEditorial({status:'pending',notes:[],sources:[]});
-          }
-          const content = result.type === 'question' ? formatQuestion(result.question) : editorialStopExplanation(result.session);
-          setChatMessages([...newMessages, { role: 'assistant', content, timestamp: new Date() }]);
+          applyEditorialResult(result, newMessages);
         } catch (err) {
           if (!chatRun.isCurrent() || isAbortError(err)) return;
           setChatError(err instanceof Error ? err.message : 'Agent 暂未完成，请重试。');
@@ -504,6 +517,37 @@ export default function Generator() {
       }
     } finally {
       if (chatRun.isCurrent()) { setLoading(false); chatRun.finish(); }
+    }
+  };
+
+  /** Retry from persisted session state. Never reuses the chat path or adds evidence/user bubbles. */
+  const handleRetryRun = async () => {
+    if (sessionChanging.current || confirmationInFlight.current || loading || articlePipelineLoading || layoutStage === 'generating' || specLoading) return;
+    const current = editorialState.getCurrent();
+    if (!current || !selectedTemplate || persistenceConflict || current.phase === 'confirmed') return;
+    const chatRun = beginChatRun();
+    setChatError(null);
+    try {
+      setLoading(true);
+      const owner = editorialState.begin();
+      const targetSession = sessionRef.current, writer = persistenceRef.current!;
+      const isCurrent = () => chatRun.isCurrent() && owner.isCurrent() && persistenceRef.current === writer && !writer.hasConflict() && sessionRef.current === targetSession;
+      const result = await runEditorialAgent({
+        session: owner.session, runId: owner.runId,
+        template: { name: selectedTemplate.name, structureJson: selectedTemplate.structureJson },
+        signal: chatRun.signal, isCurrent,
+        onCheckpoint: next => { if (isCurrent()) owner.checkpoint(next); },
+        onStep: label => { if (isCurrent()) setEditorialProgress(label); },
+        resumeFromStop: true,
+      });
+      if (!isCurrent()) return;
+      owner.checkpoint(result.session);
+      applyEditorialResult(result, chatMessagesRef.current);
+    } catch (err) {
+      if (!chatRun.isCurrent() || isAbortError(err)) return;
+      setChatError(err instanceof Error ? err.message : 'Agent 暂未完成，请重试。');
+    } finally {
+      if (chatRun.isCurrent()) { setEditorialProgress(''); setLoading(false); chatRun.finish(); }
     }
   };
 
@@ -709,6 +753,11 @@ export default function Generator() {
   let outputLocked=creationMode==='agent' || !!editorial || !!editorialSession;
   if (editorialSession) { try { requireConfirmedOutput(editorialSession); outputLocked=false; } catch { /* locked */ } }
   outputLocked=outputLocked || loading || confirming || persistenceConflict;
+  const retryBlockedReason = loading || confirming || articlePipelineLoading || specLoading || layoutStage === 'generating'
+    ? '正在处理本轮任务，完成后可操作。'
+    : persistenceConflict ? '保存版本冲突尚未解决，暂不能重试。'
+      : editorialSession?.phase === 'confirmed' ? '成稿已确认；如需修改，请直接说明新的修改要求。'
+        : undefined;
   let canConfirm=false;
   if (editorialSession?.phase==='pending_confirmation' && !loading && !confirming && !persistenceConflict) { try { assertConfirmable(editorialSession); canConfirm=true; } catch { /* specific blockers in sidebar */ } }
   // Legacy fields are only a read-only view of the chosen public version for agent sessions.
@@ -735,6 +784,44 @@ export default function Generator() {
     const next=applyEditorVerification(s,{type:'human_verified',sessionId:s.sessionId,runId:s.activeRunId,expectedRevision:s.revision,verification:{criterionId:id,inputKey:currentInputKey(s),status:'pass',actor:'editor',verifiedAt:new Date().toISOString()}});
     return next;
   });
+
+  const focusChatInput = () => {
+    const input = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="写作需求或现有稿件"]');
+    input?.focus();
+  };
+  const focusElement = (element: HTMLElement | null) => {
+    if (!element) return;
+    element.scrollIntoView?.({ block: 'nearest' });
+    element.focus();
+  };
+  const focusBatchItem = (gapId: string) => { window.setTimeout(() => focusElement(document.getElementById('batch-item-' + gapId)), 0); };
+  const handleStopAction = (action: StopAction) => {
+    if (loading || confirming) return;
+    const current = editorialState.getCurrent();
+    if (!current) return;
+    const plan = planStopAction(current, action);
+    switch (plan.kind) {
+      case 'retry': void handleRetryRun(); return;
+      case 'confirm': void confirmFinal(); return;
+      case 'prefill_input': setChatInput(plan.text); setQuestionNotice(plan.notice ?? ''); focusChatInput(); return;
+      case 'waive_sources': plan.requirementIds.forEach(id => waiveSource(id)); return;
+      case 'defer_gaps': editorialState.restore(deferGaps(current, plan.gapIds, '编辑明确豁免未解决的信息缺口')); return;
+      case 'open_question_batch': {
+        editorialState.restore(plan.session);
+        const batch = plan.session.questionBatches?.find(candidate => candidate.id === plan.session.activeBatchId);
+        if (batch?.items[0]) focusBatchItem(batch.items[0].gapId);
+        return;
+      }
+      case 'focus_batch_item': focusBatchItem(plan.gapId); return;
+      case 'focus_gaps': {
+        const target = plan.gapIds.length ? document.getElementById('gap-row-' + plan.gapIds[0]) : document.querySelector<HTMLElement>('aside[aria-label="编辑状态与备注"]');
+        window.setTimeout(() => focusElement(target), 0);
+        return;
+      }
+      case 'notice': setQuestionNotice(plan.text); return;
+      default: return;
+    }
+  };
 
   const handleCopyHtml = () => {
     if (outputLocked) return;
@@ -808,7 +895,7 @@ export default function Generator() {
       <div className={`max-w-5xl w-full mx-auto pb-6 ${isWebApp ? 'px-5 sm:px-8 lg:flex-1 lg:min-h-0 lg:overflow-hidden' : 'min-h-0 flex-1 overflow-hidden px-8'}`}>
         {selectedTemplate && (
           <div className={`grid gap-6 ${isWebApp ? 'grid-cols-1 lg:grid-cols-2 lg:h-full' : 'grid-cols-2 h-full'}`}>
-            <div className={isWebApp ? "h-[28rem] min-w-0 lg:h-full overflow-hidden" : "h-full overflow-hidden"}>
+            <div className={isWebApp ? "h-[28rem] min-h-0 min-w-0 lg:h-full overflow-hidden" : "h-full min-h-0 overflow-hidden"}>
               <ChatPanel
                 messages={chatMessages}
                 inputValue={chatInput}
@@ -835,6 +922,9 @@ export default function Generator() {
                   void generateResultFromText(draft);
                 } : undefined}
                 onLayoutTagClick={handleLayoutTagAction}
+                activeBatch={activeQuestionBatch}
+                notice={questionNotice}
+                onQuestionSubmit={payload => { void handleChatSend(payload); }}
               />
             </div>
             <PreviewPanel
@@ -848,6 +938,8 @@ export default function Generator() {
               canConfirm={canConfirm}
               outputLocked={outputLocked}
               onConfirmFinal={confirmFinal}
+              onStopAction={handleStopAction}
+              retryBlockedReason={retryBlockedReason}
               articleStage={articleStage}
               articleSpec={articleSpec}
               articleDirections={articleDirections}

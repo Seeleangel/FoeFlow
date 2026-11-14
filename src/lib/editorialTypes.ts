@@ -1,8 +1,9 @@
+import type { AnswerChoice as AnswerChoiceV3, AnswerRecord as AnswerRecordV3, EditorTurn as EditorTurnV3, GapDecision as GapDecisionV3, QuestionBatch as QuestionBatchV3, RunReport as RunReportV3 } from './editorialTypesV3';
 /** Shared v2 contracts. Runtime schemas reject malformed/unrecognised fields at trust boundaries. */
 export type Id = string;
 export type Hash = string;
 export interface EvidenceRef { evidenceId: Id; revision: number; start: number; end: number; quote: string }
-export interface EvidenceRecord { id: Id; revision: number; contentHash: Hash; kind: 'editor_message' | 'library' | 'import' | 'legacy_draft'; text: string; provenance: { documentId?: Id; documentTitle?: string; complete?: boolean; messageId?: Id; originClaimIds?: Id[] }; context: { scenario: 'real' | 'simulation' | 'unknown'; asOf?: string } }
+export interface EvidenceRecord { id: Id; revision: number; contentHash: Hash; kind: 'editor_message' | 'library' | 'import' | 'legacy_draft'; text: string; provenance: { documentId?: Id; documentTitle?: string; complete?: boolean; messageId?: Id; originClaimIds?: Id[]; replyToBatchId?: Id; slots?: { gapId: Id; value?: string; choice?: AnswerChoiceV3; optionId?: Id }[] }; context: { scenario: 'real' | 'simulation' | 'unknown'; asOf?: string } }
 export interface Scope { id: Id; kind: 'event' | 'person' | 'organization' | 'asset' | 'project' | 'other'; label: string; parentId?: Id; qualifiers: { key: string; value: string; refs: EvidenceRef[] }[]; anchors: EvidenceRef[]; identity: 'provisional' | 'aligned' }
 export interface ScopeAlignment { leftId: Id; rightId: Id; refs: EvidenceRef[] }
 export interface MetricSpec { measure: string; unit: string; population: string; phase?: string; period?: string; aggregation: 'single' | 'total' | 'sample' | 'cumulative' | 'unknown'; precision: 'exact' | 'approximate' | 'unknown' }
@@ -20,11 +21,11 @@ export type CriterionRule =
   | { kind: 'source_read'; sourceRequirementId: Id }
   | { kind: 'semantic'; instruction: string };
 export interface AcceptanceCriterion { id: Id; origin: 'user' | 'template' | 'policy'; refs: EvidenceRef[]; rule: CriterionRule; severity: 'blocking' | 'advisory'; verification: 'deterministic' | 'semantic' | 'human' }
-export interface InformationRequirement { id: Id; selector: FactSelector; label: string; reason: string; refs: EvidenceRef[]; necessity: 'blocking' | 'optional'; resolution: 'supply_fact' | 'select_option' | 'omit_or_replace' }
+export interface InformationRequirement { id: Id; selector: FactSelector; label: string; reason: string; refs: EvidenceRef[]; necessity: 'blocking' | 'optional'; resolution: 'supply_fact' | 'select_option' | 'omit_or_replace'; whyNeeded?: string; askable?: boolean; requiresReview?: boolean }
 export interface SourceWaiver { sourceRequirementId: Id; refs: EvidenceRef[]; actor: 'editor'; reason: string }
 export interface TaskContract { schemaVersion: 2; revision: number; objective: string; intents: ('inform' | 'call_to_action' | 'retrospective' | 'interview' | 'edit' | 'example' | 'other')[]; readerAction?: string; targetScopes: Id[]; requirements: InformationRequirement[]; requiredSources: RequiredSource[]; criteria: AcceptanceCriterion[]; permittedOmissions: { requirementId: Id; refs: EvidenceRef[] }[]; sourceWaivers: SourceWaiver[]; coverage?: { status: 'validated' | 'pending'; refs: EvidenceRef[] } }
-export interface Gap { id: Id; requirementId: Id; kind: 'missing' | 'conflict' | 'permission' | 'scope' | 'source_unavailable' | 'plan_ambiguity'; selector: FactSelector; label: string; reason: string; state: 'open' | 'asked' | 'resolved' | 'waived'; blocking: boolean; alternatives: { id: Id; label: string; refs: EvidenceRef[] }[]; resolutionClaimIds: Id[]; askedAtMessageId?: Id }
-export interface QuestionBatch { id: Id; gapIds: Id[]; remainingGapIds?: Id[]; items: { gapId: Id; subject: string; requested: string; why: string; options: string[] }[] }
+export interface Gap { id: Id; requirementId: Id; kind: 'missing' | 'conflict' | 'permission' | 'scope' | 'source_unavailable' | 'plan_ambiguity' | 'constraint'; selector: FactSelector; label: string; reason: string; state: 'open' | 'asked' | 'resolved' | 'waived' | 'pending_check' | 'unmet' | 'blocked_by_constraint'; blocking: boolean; alternatives: { id: Id; label: string; refs: EvidenceRef[] }[]; resolutionClaimIds: Id[]; askedAtMessageId?: Id; askHistory?: { batchId: Id; messageId: Id; promptHash: Hash; reasonCode: string }[]; gapClass?: 'fact' | 'constraint' | 'authorization' | 'internal'; askable?: boolean; whyNeeded?: string; measurement?: { criterionId: Id; measured?: string; required?: string; detail?: string } }
+export interface QuestionBatch { id: Id; gapIds: Id[]; remainingGapIds?: Id[]; items: { gapId: Id; subject: string; requested: string; why: string; options: string[] }[]; intake?: boolean; reasonCode?: string }
 export interface EditorialNote { id: Id; kind: 'asset' | 'fact_check' | 'process' | 'advisory'; text: string; relatedIds: Id[] }
 export interface AssetUse { assetId: Id; slotId: Id; use: string; channel?: string; identity?: PermissionUse['identity']; publicCaption?: string; state: 'included' | 'placeholder' | 'omitted' }
 export interface ContentBlock { id: Id; kind: 'paragraph' | 'heading' | 'list' | 'quote' | 'asset_slot'; text: string }
@@ -43,7 +44,7 @@ export interface RunBudget { decisions: number; writes: number; searches: number
 export const DEFAULT_RUN_BUDGET: Readonly<RunBudget> = Object.freeze({ decisions: 12, writes: 3, searches: 3, modelCalls: 24, maxNoProgress: 2, maxElapsedMs: 600_000 });
 /** Stable core reason codes. New modules may add domain-specific diagnostic codes. */
 export const EDITORIAL_CODES = Object.freeze({ invalidSchema: 'invalid_schema', staleOwnership: 'stale_ownership', contextCapacity: 'context_capacity', invalidReference: 'invalid_reference', scopeUnresolved: 'scope_unresolved', taskPatchRejected: 'task_patch_rejected', protectedSpan: 'protected_span', assetPermission: 'asset_permission', claimPermission: 'claim_permission', outputNotConfirmed: 'output_not_confirmed', sourceUnavailable: 'source_unavailable', noProgress: 'no_progress', budgetExhausted: 'budget_exhausted' });
-export interface Diagnostics { owner?: string; code: string; message: string; refs: EvidenceRef[] }
+export interface Diagnostics { owner?: string; code: string; message: string; refs: EvidenceRef[]; gateEffect?: 'block' | 'info' }
 export interface FactResolution { claims: FactClaim[]; conflicts: Gap[]; diagnostics: Diagnostics[]; permissions: Permission[] }
 export interface ProjectionResult { document?: PublicDocument; blockers: Diagnostics[] }
 export interface OutputBundle { document: PublicDocument; layout: LayoutStamp }
@@ -55,11 +56,12 @@ export interface EditorialSession {
   committed?: { artifact: DraftArtifact; layout: LayoutStamp; confirmation?: Confirmation };
   phase: 'planning' | 'gathering' | 'writing' | 'reviewing' | 'waiting_input' | 'pending_confirmation' | 'confirmed' | 'incomplete' | 'failed';
   activeRunId?: Id; lastQuestion?: QuestionBatch; lastStop?: { code: string; unresolvedIds: Id[]; nextActions: string[] };
+  turns?: EditorTurnV3[]; questionBatches?: QuestionBatchV3[]; activeBatchId?: Id; answers?: AnswerRecordV3[]; gapDecisions?: GapDecisionV3[]; agentDiagnostics?: Diagnostics[]; lastRun?: RunReportV3;
   editorialNotes?: EditorialNote[]; diagnostics: Diagnostics[]; humanVerifications: HumanVerification[]; legacy?: LegacySnapshot;
   selectedOutput?: 'candidate' | 'committed' | 'legacy';
 }
 export type EditorialOutcome =
-  | { type: 'question'; session: EditorialSession; question: QuestionBatch }
+  | { type: 'question'; session: EditorialSession; question: QuestionBatch; notice?: string }
   | { type: 'draft'; session: EditorialSession; artifact: DraftArtifact; handoff: { status: 'pending' } }
   | { type: 'incomplete' | 'failed'; session: EditorialSession; reason: string };
 export type ToolAction =
@@ -81,6 +83,7 @@ export type EditorialToolEvent = EventEnvelope & (
   | { type: 'layout_recorded'; layout: LayoutStamp }
   | { type: 'gate_recorded'; gate: GateReport }
   | { type: 'question_recorded'; question: QuestionBatch }
+  | { type: 'agent_diagnostic_recorded'; diagnostic: Diagnostics }
   | { type: 'stopped'; phase: 'waiting_input' | 'incomplete' | 'failed'; code: string; unresolvedIds: Id[]; nextActions: string[] });
 export type EditorialControlEvent = EventEnvelope & (
   | { type: 'editor_confirmed'; confirmation: Confirmation }
@@ -104,7 +107,7 @@ export interface RuntimeSchema<T> { parse(value: unknown): T; is(value: unknown)
 function schema<T>(check: Check): RuntimeSchema<T> { return { parse(value) { if (!check(value)) throw new Error('invalid_schema'); return structuredClone(value) as T; }, is: (value): value is T => check(value) }; }
 const ref = obj({ evidenceId: id, revision: num, start: num, end: num, quote: id });
 const refs = arr(ref), ids = arr(id);
-const evidence = obj({ id, revision: num, contentHash: id, kind: en('editor_message', 'library', 'import', 'legacy_draft'), text: str, provenance: obj({ documentId: opt(id), documentTitle: opt(str), complete: opt(bool), messageId: opt(id), originClaimIds: opt(ids) }), context: obj({ scenario: en('real', 'simulation', 'unknown'), asOf: opt(str) }) });
+const evidence = obj({ id, revision: num, contentHash: id, kind: en('editor_message', 'library', 'import', 'legacy_draft'), text: str, provenance: obj({ documentId: opt(id), documentTitle: opt(str), complete: opt(bool), messageId: opt(id), originClaimIds: opt(ids), replyToBatchId: opt(id), slots: opt(arr(obj({ gapId: id, value: opt(str), choice: opt(en('supply', 'omit', 'waive', 'grant', 'deny', 'proceed', 'defer')), optionId: opt(id) }))) }), context: obj({ scenario: en('real', 'simulation', 'unknown'), asOf: opt(str) }) });
 const scope = obj({ id, kind: en('event', 'person', 'organization', 'asset', 'project', 'other'), label: id, parentId: opt(id), qualifiers: arr(obj({ key: id, value: id, refs })), anchors: refs, identity: en('provisional', 'aligned') });
 const alignment = obj({ leftId: id, rightId: id, refs });
 const metric = obj({ measure: id, unit: id, population: id, phase: opt(str), period: opt(str), aggregation: en('single', 'total', 'sample', 'cumulative', 'unknown'), precision: en('exact', 'approximate', 'unknown') });
@@ -119,11 +122,12 @@ const rule = union(
   obj({ kind: en('preserve_blocks'), blockHashes: ids }), obj({ kind: en('permission'), subjectIds: ids, use: id, channel: opt(id), identity: opt(en('named', 'anonymous', 'not_applicable')) }),
   obj({ kind: en('source_read'), sourceRequirementId: id }), obj({ kind: en('semantic'), instruction: id }));
 const criterion = obj({ id, origin: en('user', 'template', 'policy'), refs, rule, severity: en('blocking', 'advisory'), verification: en('deterministic', 'semantic', 'human') });
-const requirement = obj({ id, selector, label: id, reason: id, refs, necessity: en('blocking', 'optional'), resolution: en('supply_fact', 'select_option', 'omit_or_replace') });
+const requirement = obj({ id, selector, label: id, reason: id, refs, necessity: en('blocking', 'optional'), resolution: en('supply_fact', 'select_option', 'omit_or_replace'), whyNeeded: opt(id), askable: opt(bool), requiresReview: opt(bool) });
 const waiver = obj({ sourceRequirementId: id, refs, actor: en('editor'), reason: id });
 const task = obj({ schemaVersion: en(2), revision: num, objective: str, intents: arr(en('inform', 'call_to_action', 'retrospective', 'interview', 'edit', 'example', 'other')), readerAction: opt(id), targetScopes: ids, requirements: arr(requirement), requiredSources: arr(source), criteria: arr(criterion), permittedOmissions: arr(obj({ requirementId: id, refs })), sourceWaivers: arr(waiver), coverage: opt(obj({ status: en('validated', 'pending'), refs })) });
-const gap = obj({ id, requirementId: id, kind: en('missing', 'conflict', 'permission', 'scope', 'source_unavailable', 'plan_ambiguity'), selector, label: id, reason: id, state: en('open', 'asked', 'resolved', 'waived'), blocking: bool, alternatives: arr(obj({ id, label: id, refs })), resolutionClaimIds: ids, askedAtMessageId: opt(id) });
-const question = obj({ id, gapIds: ids, remainingGapIds: opt(ids), items: arr(obj({ gapId: id, subject: id, requested: id, why: id, options: arr(str) })) });
+const askHistoryEntry = obj({ batchId: id, messageId: id, promptHash: id, reasonCode: id });
+const gap = obj({ id, requirementId: id, kind: en('missing', 'conflict', 'permission', 'scope', 'source_unavailable', 'plan_ambiguity', 'constraint'), selector, label: id, reason: id, state: en('open', 'asked', 'resolved', 'waived', 'pending_check', 'unmet', 'blocked_by_constraint'), blocking: bool, alternatives: arr(obj({ id, label: id, refs })), resolutionClaimIds: ids, askedAtMessageId: opt(id), askHistory: opt(arr(askHistoryEntry)), gapClass: opt(en('fact', 'constraint', 'authorization', 'internal')), askable: opt(bool), whyNeeded: opt(id), measurement: opt(obj({ criterionId: id, measured: opt(str), required: opt(str), detail: opt(str) })) });
+const question = obj({ id, gapIds: ids, remainingGapIds: opt(ids), items: arr(obj({ gapId: id, subject: id, requested: id, why: id, options: arr(str) })), intake: opt(bool), reasonCode: opt(id) });
 const note = obj({ id, kind: en('asset', 'fact_check', 'process', 'advisory'), text: str, relatedIds: ids });
 const asset = obj({ assetId: id, slotId: id, use: id, channel: opt(id), identity: opt(en('named', 'anonymous', 'not_applicable')), publicCaption: opt(str), state: en('included', 'placeholder', 'omitted') });
 const block = obj({ id, kind: en('paragraph', 'heading', 'list', 'quote', 'asset_slot'), text: str });
@@ -136,8 +140,17 @@ const layout = obj({ contentHash: id, themeId: id, themeVersion: id, html: id, h
 const confirmation = obj({ inputKey, htmlHash: id, actor: en('editor'), confirmedAt: id });
 const human = obj({ criterionId: id, inputKey, status: en('pass', 'fail'), actor: en('editor'), verifiedAt: id });
 const receipt = obj({ id, documentId: id, contentHash: id, range: v => Array.isArray(v) && v.length === 2 && v.every(num) && v[1] > v[0], evidenceIds: ids, consumedByStage: en('brief', 'write', 'review'), contextHash: id, sourceRequirementId: opt(id) });
-const diagnostic = obj({ owner: opt(id), code: id, message: str, refs });
-const session = obj({ schemaVersion: en(2), sessionId: id, revision: num, evidenceRevision: num, policyRevision: num, evidence: arr(evidence), readReceipts: arr(receipt), scopes: arr(scope), alignments: arr(alignment), claims: arr(claim), permissions: arr(permission), task, gaps: arr(gap), candidate: opt(draft), review: opt(review), layout: opt(layout), gate: opt(gate), committed: opt(obj({ artifact: draft, layout, confirmation: opt(confirmation) })), phase: en('planning', 'gathering', 'writing', 'reviewing', 'waiting_input', 'pending_confirmation', 'confirmed', 'incomplete', 'failed'), activeRunId: opt(id), lastQuestion: opt(question), lastStop: opt(obj({ code: id, unresolvedIds: ids, nextActions: arr(str) })), editorialNotes: opt(arr(note)), diagnostics: arr(diagnostic), humanVerifications: arr(human), legacy: opt(obj({ mode: en('pending', 'confirmed', 'legacy-manual', 'damaged'), title: str, text: str, html: str, confirmed: bool, originalConfirmation: () => true, raw: () => true })), selectedOutput: opt(en('candidate', 'committed', 'legacy')) });
+const diagnostic = obj({ owner: opt(id), code: id, message: str, refs, gateEffect: opt(en('block', 'info')) });
+const turnRecordV3 = obj({ id, messageId: id, receivedAt: str, text: str, replyToBatchId: opt(id), intent: en('instruction', 'answer', 'confirm_answers', 'confirm_delivery', 'cancel', 'other'), bindingStatus: en('none', 'bound', 'partial', 'needs_assignment'), bindingRefs: ids });
+const answerRecordV3 = obj({ id, turnId: id, messageId: id, batchId: id, gapId: id, method: en('explicit_slot', 'numbered', 'model_mapped', 'editor_assigned', 'confirmation'), value: opt(str), choice: opt(en('supply', 'omit', 'waive', 'grant', 'deny', 'proceed', 'defer')), optionId: opt(id), refs, resultingClaimIds: opt(ids), createdAt: str });
+const gapDecisionV3 = obj({ id, gapId: id, by: en('editor'), kind: en('supply', 'omit', 'waive', 'proceed', 'defer', 'deny'), refs, note: opt(str), createdAt: str });
+const questionItemV3 = obj({ gapId: id, gapClass: en('fact', 'constraint', 'authorization', 'internal'), subject: id, requested: id, why: id, expected: en('free_text', 'choice', 'authorization'), options: opt(arr(obj({ id, label: id, isDefaultAffirmative: opt(bool), choice: opt(en('supply', 'omit', 'grant', 'deny')) }))), answerSlot: id });
+const questionBatchV3 = obj({ id, createdAtMessageId: id, gapIds: ids, items: arr(questionItemV3), status: en('active', 'answered', 'partially_answered', 'superseded', 'cancelled'), answeredByMessageId: opt(id), remainingGapIds: opt(ids), intake: opt(bool), reasonCode: opt(id), understood: opt(arr(str)) });
+const stopFieldsV3 = (v: unknown) => v === undefined || !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(value => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean');
+const modelCallRecordV3 = obj({ callId: id, stage: id, attempt: num, contractVersion: id, startedAt: str, endedAt: str, result: en('ok', 'transport_error', 'syntax_error', 'schema_error', 'semantic_error'), acceptedCount: num, quarantinedCount: num, errorCodes: arr(str) });
+const stopRecordV3 = obj({ code: id, class: en('external', 'input', 'internal'), stage: opt(id), retryable: bool, headline: id, detail: str, fields: opt(stopFieldsV3), actions: arr(en('retry', 'supply', 'waive', 'edit_task', 'answer', 'confirm', 'report')), traceId: id, preserved: obj({ candidateRevision: opt(num), committedRevision: opt(num), inputKey: opt(inputKey) }) });
+const runReportV3 = obj({ runId: id, startedAt: str, endedAt: str, outcome: en('needs_editor', 'ready', 'stopped', 'cancelled'), stop: opt(stopRecordV3), modelCalls: arr(modelCallRecordV3), agentDiagnostics: arr(diagnostic) });
+const session = obj({ schemaVersion: en(2), sessionId: id, revision: num, evidenceRevision: num, policyRevision: num, evidence: arr(evidence), readReceipts: arr(receipt), scopes: arr(scope), alignments: arr(alignment), claims: arr(claim), permissions: arr(permission), task, gaps: arr(gap), candidate: opt(draft), review: opt(review), layout: opt(layout), gate: opt(gate), committed: opt(obj({ artifact: draft, layout, confirmation: opt(confirmation) })), phase: en('planning', 'gathering', 'writing', 'reviewing', 'waiting_input', 'pending_confirmation', 'confirmed', 'incomplete', 'failed'), activeRunId: opt(id), lastQuestion: opt(question), lastStop: opt(obj({ code: id, unresolvedIds: ids, nextActions: arr(str) })), turns: opt(arr(turnRecordV3)), questionBatches: opt(arr(questionBatchV3)), activeBatchId: opt(id), answers: opt(arr(answerRecordV3)), gapDecisions: opt(arr(gapDecisionV3)), agentDiagnostics: opt(arr(diagnostic)), lastRun: opt(runReportV3), editorialNotes: opt(arr(note)), diagnostics: arr(diagnostic), humanVerifications: arr(human), legacy: opt(obj({ mode: en('pending', 'confirmed', 'legacy-manual', 'damaged'), title: str, text: str, html: str, confirmed: bool, originalConfirmation: () => true, raw: () => true })), selectedOutput: opt(en('candidate', 'committed', 'legacy')) });
 const envelope = { sessionId: id, runId: id, expectedRevision: num };
 const eventShapes: Record<string, Check>[] = [
   { type: en('evidence_loaded'), records: arr(evidence), receipts: arr(receipt) },
@@ -145,10 +158,46 @@ const eventShapes: Record<string, Check>[] = [
   { type: en('diagnostics_updated'), diagnostics: arr(diagnostic) }, { type: en('handoff_ready') }, { type: en('notes_recorded'), notes: arr(note) },
   { type: en('task_revised'), task }, { type: en('gaps_updated'), gaps: arr(gap) }, { type: en('candidate_updated'), artifact: draft },
   { type: en('review_recorded'), review }, { type: en('layout_recorded'), layout }, { type: en('gate_recorded'), gate },
-  { type: en('question_recorded'), question }, { type: en('stopped'), phase: en('waiting_input', 'incomplete', 'failed'), code: id, unresolvedIds: ids, nextActions: arr(str) },
+  { type: en('question_recorded'), question }, { type: en('agent_diagnostic_recorded'), diagnostic }, { type: en('stopped'), phase: en('waiting_input', 'incomplete', 'failed'), code: id, unresolvedIds: ids, nextActions: arr(str) },
 ];
 const toolEvent = union(...eventShapes.map(fields => obj({ ...envelope, ...fields })));
-export const EditorialSessionSchema = schema<EditorialSession>(session);
+/** Registered diagnostic codes. Unregistered codes default to info; the guard test fails on new unregistered codes. */
+export const DIAGNOSTIC_GATE_EFFECTS: Readonly<Record<string, 'block' | 'info'>> = Object.freeze({
+  // Block: the current inputKey gate is undecidable.
+  context_capacity: 'block', invalid_schema: 'block', invalid_artifact: 'block', artifact_invalid: 'block', content_key_mismatch: 'block',
+  invalid_review: 'block', review_invalid: 'block', review_unavailable: 'block', stale_review: 'block', stale_layout: 'block', stale_gate: 'block',
+  invalid_layout: 'block', layout_invalid: 'block', unsafe_fact_snapshot: 'block', internal_invariant: 'block', invalid_task_contract: 'block',
+  legacy_requires_validation: 'block', legacy_damaged: 'block',
+  // Info: visible in the diagnostic panel, never a second gate.
+  invalid_reference: 'info', legacy_scope_unresolved: 'info', invalid_directive: 'info', invalid_directive_reference: 'info', low_confidence_directive: 'info',
+  requirement_duplicates_constraint: 'info', requirement_overlaps_constraint: 'info', requirement_without_dependency: 'info',
+  invalid_alignment: 'info', invalid_scope: 'info', invalid_claim: 'info', invalid_claims: 'info', invalid_scopes: 'info', invalid_permissions: 'info',
+  scope_unresolved: 'info', missing_status_basis: 'info', invalid_cardinality_basis: 'info', legacy_not_evidence: 'info', invalid_supersedes: 'info',
+  invalid_patch: 'info', invalid_fact_patch: 'info', batch_candidate_not_validated: 'info', claim_identity_changed: 'info',
+  declassification_requires_editor: 'info', status_transition_without_basis: 'info', permission_identity_immutable: 'info', permission_upgrade_requires_editor: 'info',
+  invalid_permission: 'info', task_patch_rejected: 'info', migrated_plan_ambiguity: 'info', invalid_action: 'info', model_output_quarantined: 'info', extract_repair_failed: 'info',
+  model_output_invalid: 'info', invalid_notes: 'info', invalid_diagnostics: 'info', invalid_extraction: 'info',
+});
+export function gateEffectOf(diagnostic: Diagnostics): 'block' | 'info' {
+  if (diagnostic.gateEffect === 'block' || diagnostic.gateEffect === 'info') return diagnostic.gateEffect;
+  if (DIAGNOSTIC_GATE_EFFECTS[diagnostic.code]) return DIAGNOSTIC_GATE_EFFECTS[diagnostic.code];
+  if (diagnostic.owner === 'compatibility' && (diagnostic.code === 'legacy_requires_validation' || diagnostic.code === 'legacy_damaged')) return 'block';
+  return 'info';
+}
+export function annotateDiagnostics(diagnostics: Diagnostics[]): Diagnostics[] {
+  return diagnostics.map(diagnostic => ({ ...diagnostic, gateEffect: gateEffectOf(diagnostic) }));
+}
+const rawSessionSchema = schema<EditorialSession>(session);
+/** Persisted diagnostics always carry an explicit gateEffect; classification is centralised here. */
+export const EditorialSessionSchema: RuntimeSchema<EditorialSession> = {
+  is: rawSessionSchema.is,
+  parse(value) {
+    const parsed = rawSessionSchema.parse(value);
+    parsed.diagnostics = annotateDiagnostics(parsed.diagnostics);
+    if (parsed.agentDiagnostics) parsed.agentDiagnostics = annotateDiagnostics(parsed.agentDiagnostics);
+    return parsed;
+  },
+};
 export const TaskContractSchema = schema<TaskContract>(task);
 export const FactClaimSchema = schema<FactClaim>(claim);
 export const EvidenceRecordSchema = schema<EvidenceRecord>(evidence);
@@ -173,7 +222,7 @@ export const ToolActionSchema = schema<ToolAction>(union(
 ));
 export const ToolResultSchema = schema<ToolResult>(obj({ tool: en('search', 'read', 'write', 'review', 'layout', 'ask', 'submit'), status: en('progress', 'no_progress', 'rejected', 'failed'), code: id, changedIds: ids, events: arr(toolEvent), allowedNext: arr(en('search', 'read', 'write', 'review', 'layout', 'ask', 'submit')), diagnostics: arr(diagnostic), loadedSources: opt(arr(obj({ sourceRequirementId: opt(id), documentId: id, evidenceId: id, range }))) }));
 export const EditorialOutcomeSchema = schema<EditorialOutcome>(union(
-  obj({ type: en('question'), session, question }), obj({ type: en('draft'), session, artifact: draft, handoff: obj({ status: en('pending') }) }), obj({ type: en('incomplete', 'failed'), session, reason: id })
+  obj({ type: en('question'), session, question, notice: opt(str) }), obj({ type: en('draft'), session, artifact: draft, handoff: obj({ status: en('pending') }) }), obj({ type: en('incomplete', 'failed'), session, reason: id })
 ));
 export function createEditorialSession(sessionId: string): EditorialSession {
   return { schemaVersion: 2, sessionId, revision: 0, evidenceRevision: 0, policyRevision: 0, evidence: [], readReceipts: [], scopes: [], alignments: [], claims: [], permissions: [], gaps: [], diagnostics: [], humanVerifications: [], task: { schemaVersion: 2, revision: 0, objective: '', intents: [], targetScopes: [], requirements: [], requiredSources: [], criteria: [], permittedOmissions: [], sourceWaivers: [] }, phase: 'planning' };
@@ -212,3 +261,6 @@ export function sameInputKey(a: InputKey, b: InputKey): boolean { return stableJ
 
 /** Entity order is not evidence progress. */
 export function sameEntitySet(a: readonly unknown[], b: readonly unknown[]): boolean { return stableJson(a.map(stableJson).sort()) === stableJson(b.map(stableJson).sort()); }
+
+/** Runtime-check toolkit shared with the v3 shadow contracts. Additive only: the v2 schemas above are unchanged. */
+export const runtimeChecks = Object.freeze({ str, id, num, bool, en, opt, arr, obj, union, schema, ref, refs, ids, evidence, scope, alignment, claim, permission, selector, task, note, draft, inputKey, gate, review, layout, confirmation, human, receipt, diagnostic });

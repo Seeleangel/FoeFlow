@@ -56,6 +56,6 @@ describe('R01-R06 existing operator safety behaviors at real module boundaries',
   it('R06 unknown mark_confirmed then endless submit stops within approved at-most limit', async () => {
     const s = ready(); delete s.candidate; delete s.review; delete s.layout; delete s.gate; delete s.committed; let decisions = 0;
     const model: EditorialModelPort = async ({ stage }) => { if (stage === 'preflight') return '{"factPatch":{}}'; if (stage === 'decide') { decisions++; return decisions === 1 ? '{"tool":"mark_confirmed"}' : '{"tool":"submit"}'; } throw new Error('fixture_error:'+stage); };
-    const outcome = await runEditorialController({ session: s, model, signal: new AbortController().signal, sources: noSources }); expect(outcome.type).toBe('incomplete'); expect(decisions).toBeGreaterThan(0); expect(decisions).toBeLessThanOrEqual(12); expect(outcome.session.committed).toBeUndefined(); expect(outcome.session.candidate).toBeUndefined(); mark('R06');
+    const outcome = await runEditorialController({ session: s, model, signal: new AbortController().signal, sources: noSources, budget: { writes: 0 } }); expect(outcome.type).toBe('incomplete'); expect(decisions).toBeGreaterThan(0); expect(decisions).toBeLessThanOrEqual(12); expect(outcome.session.committed).toBeUndefined(); expect(outcome.session.candidate).toBeUndefined(); mark('R06');
   });
 });

@@ -1,7 +1,7 @@
 import { taskContractValid } from './editorialContract';
 import { renderPublicDocument } from './editorialRender';
 import { getAllThemes } from './themeLoader';
-import { artifactContentHash, hashText, type EditorialSession, type GateReport, type GateCheck, type LayoutStamp, type RequiredSource, type FactClaim } from './editorialTypes';
+import { artifactContentHash, gateEffectOf, hashText, type EditorialSession, type GateReport, type GateCheck, type LayoutStamp, type RequiredSource, type FactClaim } from './editorialTypes';
 import { currentInputKey, sameInputKey } from './editorialTypes';
 import { publicArtifactBlocks, validatePublicArtifact, projectPublicArtifact } from './editorialDocument';
 import { resolveFacts, permissionAllows, validRefs, selectorsEquivalent } from './editorialFacts';
@@ -19,6 +19,21 @@ export function sourceWaiver(s: EditorialSession, sourceId: string): string | un
   const waiver = s.task.sourceWaivers.find(w => w.sourceRequirementId === sourceId && w.actor === 'editor' && validRefs(s, w.refs) && w.refs.every(ref => s.evidence.find(e => e.id === ref.evidenceId)?.kind === 'editor_message'));
   return waiver?.reason;
 }
+/** A denied/deferred material may pass only when the candidate does not actually use it. */
+function permissionSubjectStatus(s: EditorialSession, criterionId: string, subjectId: string, use: { channel: string; purpose: string; identity: 'named' | 'anonymous' | 'not_applicable' }): { status: GateCheck['status']; detail: string } {
+  const inUse = !!s.candidate?.assets.some(asset => asset.assetId === subjectId && asset.state === 'included');
+  const gap = s.gaps.find(item => item.requirementId === criterionId && item.selector?.scopeId === subjectId);
+  const decisionKind = (s.gapDecisions ?? []).find(decision => decision.gapId === gap?.id && (decision.kind === 'defer' || decision.kind === 'deny'))?.kind;
+  const denied = s.permissions.some(permission => permission.subjectId === subjectId && permission.state === 'denied');
+  if (denied) return inUse
+    ? { status: 'fail', detail: '编辑拒绝授权，但正文仍在使用该素材。' }
+    : { status: 'pass', detail: '编辑拒绝授权；正文未使用该素材' };
+  if (decisionKind) return inUse
+    ? { status: 'fail', detail: '编辑已选择不使用该素材，但正文仍在使用。' }
+    : { status: 'pass', detail: '编辑选择按现有信息继续；正文未使用该素材' };
+  return permissionAllows(s, subjectId, use) ? { status: 'pass', detail: '授权已确认。' } : { status: 'fail', detail: '缺少必要授权。' };
+}
+
 /** The final renderer must preserve every block's visible text; position checks use actual p elements. */
 function renderedBlocks(s: EditorialSession, layout: LayoutStamp): { first?: string; valid: boolean } {
   if (!s.candidate || layout.contentHash !== s.candidate.contentHash || layout.htmlHash !== hashText(layout.html) || typeof DOMParser === 'undefined') return { valid: false };
@@ -40,7 +55,9 @@ export function validateAcceptance(s: EditorialSession, layout?: LayoutStamp): G
   const add = (id: string, status: GateCheck['status'], detail: string, blocking = true, verifier = 'deterministic') => { checks.push({ criterionId: id, status, detail, verifier }); if (blocking && status !== 'pass') blockers.add(id); };
   add('task_plan', taskContractValid(s) ? 'pass' : 'unknown', 'Structured objective and intent coverage required.');
   add('candidate', s.candidate && s.candidate.contentHash === artifactContentHash(s.candidate.title, s.candidate.bodyMarkdown, s.candidate.assets) ? 'pass' : 'unknown', 'Current content revision required.');
-  for (const diagnostic of [...s.diagnostics, ...result.diagnostics, ...validatePublicArtifact(s)]) add('diagnostic:' + diagnostic.code, 'unknown', diagnostic.message);
+  for (const diagnostic of [...s.diagnostics, ...result.diagnostics].filter(diagnostic => gateEffectOf(diagnostic) === 'block')) add('diagnostic:' + diagnostic.code, 'unknown', diagnostic.message);
+  // Artifact/review/layout failures are re-derived here and always block the current candidate.
+  for (const diagnostic of validatePublicArtifact(s)) add('diagnostic:' + diagnostic.code, 'unknown', diagnostic.message);
   for (const gap of result.conflicts) add(gap.id, 'fail', gap.reason, gap.blocking);
   const rendered = layout ? renderedBlocks(s, layout) : undefined;
   if (rendered) add('layout_integrity', rendered.valid ? 'pass' : 'fail', 'Final visible HTML and block order must match public content.');
@@ -64,7 +81,16 @@ export function validateAcceptance(s: EditorialSession, layout?: LayoutStamp): G
         case 'exclude_claims': { const facts = rule.factIds.map(claim); status = facts.some(c => !c) ? 'unknown' : facts.some(c => normalized(body + (s.candidate?.title ?? '')).includes(normalized(c!.value))) ? 'fail' : 'pass'; break; }
         case 'length': { const n = [...normalized(body)].length; status = n >= (rule.min ?? 0) && n <= (rule.max ?? Infinity) ? 'pass' : 'fail'; detail = `Visible body characters (excluding whitespace): ${n}`; break; }
         case 'preserve_blocks': status = rule.blockHashes.every(hash => s.candidate?.blocks.some(b => hashText(b.text) === hash)) ? 'pass' : 'fail'; break;
-        case 'permission': status = rule.subjectIds.length && rule.subjectIds.every(subjectId => permissionAllows(s, subjectId, { channel: rule.channel ?? 'public', purpose: rule.use, identity: rule.identity ?? 'not_applicable' })) ? 'pass' : 'fail'; break;
+        case 'permission': {
+          let permissionStatus: GateCheck['status'] = rule.subjectIds.length ? 'pass' : 'fail';
+          let permissionDetail = rule.subjectIds.length ? '' : '缺少必要授权。';
+          for (const subjectId of rule.subjectIds) {
+            const result = permissionSubjectStatus(s, criterion.id, subjectId, { channel: rule.channel ?? 'public', purpose: rule.use, identity: rule.identity ?? 'not_applicable' });
+            if (result.status !== 'pass') { permissionStatus = result.status; permissionDetail = result.detail; break; }
+            permissionDetail = permissionDetail || result.detail;
+          }
+          status = permissionStatus; detail = permissionDetail; break;
+        }
         case 'source_read': { const source = sourceStatus(rule.sourceRequirementId); status = source.status; detail = source.detail; break; }
       }
     } else {
@@ -81,7 +107,18 @@ export function validateAcceptance(s: EditorialSession, layout?: LayoutStamp): G
   for (const requirement of s.task.requirements) {
     const omitted = s.task.permittedOmissions.some(o => o.requirementId === requirement.id && validRefs(s, o.refs));
     const supplied = result.claims.some(c => c.epistemic === 'supported' && c.visibility === 'public' && selectorsEquivalent(s, c.selector, requirement.selector));
-    add('requirement:' + requirement.id, omitted || supplied ? 'pass' : 'unknown', requirement.reason, requirement.necessity === 'blocking');
+    // Step 2: an explicit defer decision passes the gate but stays visible in the check detail.
+    const gap = s.gaps.find(item => item.requirementId === requirement.id);
+    const deferred = !!gap && (s.gapDecisions ?? []).some(decision => decision.gapId === gap.id && decision.kind === 'defer');
+    const soft = requirement.askable === false;
+    // A confirmation choice answers with the selected option, not a claim grounded in the
+    // editor message; it closes the requirement for the gate with a visible detail.
+    const confirmedChoice = !!gap && (s.answers ?? []).some(answer => answer.gapId === gap.id && answer.method === 'confirmation' && answer.choice === 'supply');
+    // G3: a requirement without a dependency is treated as a constraint, not a dead-end blocker.
+    const missingDependency = !requirement.whyNeeded || !requirement.whyNeeded.trim();
+    add('requirement:' + requirement.id, missingDependency || omitted || supplied || deferred || soft || confirmedChoice ? 'pass' : 'unknown',
+      missingDependency ? '该要求缺少依赖，已按约束处理：' + requirement.reason : confirmedChoice ? '编辑已按默认选项回答：' + requirement.reason : soft ? '软校验：与输出约束重合，按约束处理：' + requirement.reason : deferred ? '编辑已选择按现有信息继续：' + requirement.reason : requirement.reason,
+      requirement.necessity === 'blocking');
   }
   return { inputKey, checks, blockers: [...blockers] };
 }

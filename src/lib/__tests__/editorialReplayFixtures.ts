@@ -31,7 +31,7 @@ function grounded(c: ReplayCase, spec: Supplement, data: Record<string, unknown>
     for (const item of spec.permissionCriteria ?? []) criteria.push({ id: 'use:' + item.subjectId, origin: 'user', refs, severity: 'blocking', verification: 'deterministic', rule: { kind: 'permission', subjectIds: [item.subjectId], use: item.purpose, channel: 'public', identity: item.identity } });
     result.taskPatch = { baseRevision: task.revision, refs, objective: task.objective || '根据编辑要求撰写公开稿件', intents: spec.requirements?.some(r => r.predicate === 'quotation') ? ['interview'] : ['inform'], targetScopes: spec.scopes.map(scope => scope.id),
       criteria, requiredSources: spec.requiredSources.map(index => ({ id: 'required:' + index, selector: { title: c.input.fixtures[index].title }, purpose: '编辑指定的材料必须真实读取并用于后续核对', refs, depth: 'full_document', state: 'pending' })),
-      requirements: (spec.requirements ?? []).map(item => ({ id: item.id, selector: { scopeId: item.scopeId, predicate: item.predicate, ...(item.metric ? { metric: item.metric } : {}) }, label: item.label, reason: '当前任务明确需要本项；其他对象或阶段信息不能替代', refs, necessity: 'blocking', resolution: 'supply_fact' })) };
+      requirements: (spec.requirements ?? []).map(item => ({ id: item.id, selector: { scopeId: item.scopeId, predicate: item.predicate, ...(item.metric ? { metric: item.metric } : {}) }, label: item.label, reason: '当前任务明确需要本项；其他对象或阶段信息不能替代', whyNeeded: '读者需要该信息：' + item.label, refs, necessity: 'blocking', resolution: 'supply_fact' })) };
   }
   return result;
 }

@@ -1,5 +1,6 @@
 import { EditorialStatusPanel } from './EditorialStatusPanel';
 import type { EditorialSession } from '@/lib/editorialTypes';
+import type { StopAction } from '@/lib/editorialTypesV3';
 import { isWebApp } from '@/lib/platform';
 import { safeArticleHtml } from '@/lib/safeArticleHtml';
 import type { EditorialHandoff } from '@/lib/editorialAgent';
@@ -84,6 +85,8 @@ interface PreviewPanelProps {
   canConfirm: boolean;
   outputLocked: boolean;
   onConfirmFinal: () => void;
+  onStopAction: (action: StopAction) => void;
+  retryBlockedReason?: string;
 
   // Actions
   onCopyHtml: () => void;
@@ -99,7 +102,7 @@ export default function PreviewPanel({
   layoutFeedbackState, onLayoutRefineRequest,
   onLayoutAnalyze, onLayoutDirectionSelect, onStyleSpecChange,
   generatedHtml, generatedText,
-  editorial, editorialSession, onWaiveSource, onVerify, onResolveDiagnostic, onSelectOutput, editorialBusy, canConfirm, outputLocked, onConfirmFinal,
+  editorial, editorialSession, onWaiveSource, onVerify, onResolveDiagnostic, onSelectOutput, editorialBusy, canConfirm, outputLocked, onConfirmFinal, onStopAction, retryBlockedReason,
   onCopyHtml, onSaveDraft, onExportWord,
 }: PreviewPanelProps) {
   const [analyzingMsg, analyzeIdx] = useRotatingMessage(LAYOUT_ANALYZING_MESSAGES, layoutStage ?? 'idle');
@@ -107,7 +110,7 @@ export default function PreviewPanel({
 
   return (
     <div className="h-full overflow-y-auto">
-      {editorialSession && <EditorialStatusPanel session={editorialSession} onWaiveSource={onWaiveSource} onVerify={onVerify} onResolveDiagnostic={onResolveDiagnostic} onSelectOutput={onSelectOutput} disabled={editorialBusy} />}
+      {editorialSession && <EditorialStatusPanel session={editorialSession} onWaiveSource={onWaiveSource} onVerify={onVerify} onResolveDiagnostic={onResolveDiagnostic} onSelectOutput={onSelectOutput} onStopAction={onStopAction} retryBlockedReason={retryBlockedReason} canConfirm={canConfirm} disabled={editorialBusy} />}
       {/* Article Pipeline UI */}
       {articleStage && (
         <ArticlePipeline
@@ -127,10 +130,13 @@ export default function PreviewPanel({
       {/* Normal Preview (only when article pipeline is NOT active) */}
       {!articleStage && generatedHtml && (
         <div className="border border-stone-200 rounded-2xl bg-white shadow-lg shadow-stone-100/50 overflow-hidden">
-          <div className="px-7 py-5 border-b border-stone-100 flex items-center justify-between bg-gradient-to-r from-stone-50/50 to-white">
-            <div className="flex items-center gap-2.5 font-semibold text-stone-900">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 bg-gradient-to-r from-stone-50/50 to-white px-7 py-5">
+            <div className="flex min-w-0 flex-wrap items-center gap-2.5 font-semibold text-stone-900">
               <FileText className="w-5 h-5 text-green-600 animate-pulse-slow" />
               <span className="text-lg">生成结果</span>
+              {editorialSession?.lastRun?.stop && editorialSession.candidate && generatedHtml && <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-normal text-amber-800">
+                第 {editorialSession.lastRun.stop.preserved.candidateRevision ?? editorialSession.candidate.revision} 版 · 本次失败未修改
+              </span>}
             </div>
             {!editorial && !editorialSession && <div className="flex items-center gap-3">
               <LayoutControls
@@ -431,7 +437,7 @@ export default function PreviewPanel({
             <FileText className="w-8 h-8 text-green-600" />
           </div>
           <p className="text-stone-700 font-medium">暂无生成内容</p>
-          <p className="text-sm text-stone-400 mt-1.5">{isWebApp ? '生成文章或排版现有稿件后，预览会显示在这里' : '在左侧与 AI 对话生成推文后，预览将显示在这里'}</p>
+          <p className="text-sm text-stone-600 mt-1.5">{isWebApp ? '生成文章或排版现有稿件后，预览会显示在这里' : '在左侧与 AI 对话生成推文后，预览将显示在这里'}</p>
         </div>
       )}
     </div>

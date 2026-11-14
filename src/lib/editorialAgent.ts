@@ -36,9 +36,9 @@ export function legacyEditorialResult(outcome: EditorialOutcome): EditorialResul
   const s = outcome.session;
   if (outcome.type === 'question') {
     const remaining = (outcome.question.remainingGapIds ?? []).map(id => s.gaps.find(g => g.id === id)).filter(Boolean).map(g => g!.label + '（' + g!.reason + '）');
-    return { type: 'question', text: formatQuestion(outcome.question) + (remaining.length ? '\n其余待补事项：' + remaining.join('；') : ''), outcome };
+    return { type: 'question', text: (outcome.notice ? outcome.notice + '\n' : '') + formatQuestion(outcome.question) + (remaining.length ? '\n其余待补事项：' + remaining.join('；') : ''), outcome };
   }
-  if (outcome.type !== 'draft') return { type: 'question', text: '本轮尚未完成：' + outcome.reason + '。已保留当前候选与原确认稿。\n' + (s.lastStop?.nextActions.join('\n') ?? ''), outcome };
+  if (outcome.type !== 'draft') { const stop = s.lastRun?.stop; return { type: 'question', text: '本轮尚未完成：' + outcome.reason + '。' + (stop ? stop.headline + '：' + stop.detail : '已保留当前候选与原确认稿。'), outcome }; }
   const document = projectPublicArtifact(outcome.artifact);
   const notes = [...s.editorialNotes ?? [], ...outcome.artifact.editorialNotes, ...s.review?.notes ?? []].map(note => note.text).filter(text => !s.claims.some(c => c.visibility === 'private' && publicTextKey(text).includes(publicTextKey(c.value))));
   for (const waiver of s.task.sourceWaivers) notes.push('指定来源「' + (s.task.requiredSources.find(source => source.id === waiver.sourceRequirementId)?.selector.title ?? waiver.sourceRequirementId) + '」已由编辑明确豁免：' + waiver.reason);

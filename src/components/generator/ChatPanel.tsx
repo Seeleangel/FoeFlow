@@ -5,6 +5,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Sparkles, User, Send, History, Plus, FileText, X } from 'lucide-react';
 import TypewriterText from '@/components/TypewriterText';
 import { getDateBasedSuggestions, getCachedSuggestions, prefetchSuggestions } from '@/lib/dateSuggestions';
+import { QuestionBatchCard } from './QuestionBatchCard';
+import type { AnswerChoice, QuestionBatch } from '@/lib/editorialTypesV3';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -34,6 +36,9 @@ interface ChatPanelProps {
   onRetry: () => void;
   onPreviewInput?: () => void;
   onLayoutTagClick?: (tag: string) => void;
+  activeBatch?: QuestionBatch;
+  onQuestionSubmit?: (payload: { batchId: string; slots: { gapId: string; optionId?: string; value?: string; choice?: AnswerChoice }[]; text: string; bubbleText?: string }) => void;
+  notice?: string;
 }
 
 function formatTime(date: Date) {
@@ -65,7 +70,7 @@ export default function ChatPanel({
   showHistory, sessions, currentSessionId, chatScrollRef,
   chatError, onInputChange, onSend, onNewSession, onLoadSession,
   onDeleteSession, onToggleHistory, onGeneratePreview, allowMessagePreview, onRetry,
-  onLayoutTagClick, onPreviewInput,
+  onLayoutTagClick, onPreviewInput, activeBatch, onQuestionSubmit, notice,
 }: ChatPanelProps) {
   const historyRef = useRef<HTMLDivElement>(null);
 
@@ -110,7 +115,7 @@ export default function ChatPanel({
   };
 
   return (
-    <div className="bg-gradient-to-b from-stone-50/90 to-white rounded-2xl border border-stone-100 shadow-sm transition-all duration-300 hover:shadow-md flex flex-col h-full">
+    <div className="flex h-full min-h-0 flex-col rounded-2xl border border-stone-100 bg-gradient-to-b from-stone-50/90 to-white shadow-sm transition-all duration-300 hover:shadow-md">
       {/* Header */}
       <div ref={historyRef} className="px-5 py-3.5 border-b border-stone-100 bg-white/80 backdrop-blur-sm flex items-center justify-between flex-shrink-0 relative z-20">
         <div className="flex items-center gap-2.5">
@@ -165,7 +170,7 @@ export default function ChatPanel({
       </div>
 
       {/* Messages */}
-      <div ref={chatScrollRef} className="p-5 space-y-4 overflow-y-auto bg-white/50 flex-1">
+      <div ref={chatScrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-white/50 p-5">
         {messages.length === 0 ? (
           <div className="text-center py-16">
             <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-brand-100 to-brand-50 flex items-center justify-center mx-auto mb-6 shadow-md animate-pulse-slow">
@@ -265,7 +270,7 @@ export default function ChatPanel({
         <div className="px-5 pb-2">
           <div className="flex items-center justify-between bg-red-50 border border-red-200 rounded-lg px-3 py-2">
             <span className="text-xs text-red-600 truncate flex-1">{chatError}</span>
-            <Button variant="ghost" size="sm" onClick={onRetry}
+            <Button variant="ghost" size="sm" onClick={() => onRetry()}
               className="text-red-600 hover:bg-red-100 h-7 text-xs ml-2">
               重试
             </Button>
@@ -273,6 +278,20 @@ export default function ChatPanel({
         </div>
       )}
 
+      {notice && <div className="px-5 pt-3"><p role="status" className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">{notice}</p></div>}
+      {activeBatch && <div className="flex max-h-[60%] min-h-0 shrink-0 flex-col px-5 pt-3">
+        <QuestionBatchCard key={activeBatch.id} batch={activeBatch} disabled={loading || pipelineLoading} processing={loading || pipelineLoading} onSubmit={payload => {
+          const text = '[卡片提交记录]\n' + payload.slots.map(slot => {
+            const item = activeBatch.items.find(candidate => candidate.gapId === slot.gapId);
+            if (slot.choice === 'defer') return (item?.subject ?? slot.gapId) + '：无法提供';
+            const option = slot.optionId ? item?.options?.find(candidate => candidate.id === slot.optionId) : undefined;
+            return (item?.subject ?? slot.gapId) + '：' + (option?.label ?? slot.value ?? '');
+          }).join('\n');
+          const subjects = payload.slots.map(slot => activeBatch.items.find(item => item.gapId === slot.gapId)?.subject ?? slot.gapId);
+          const bubbleText = `已提交 ${payload.slots.length} 项回答：${subjects.join('、')}`;
+          if (text) onQuestionSubmit?.({ ...payload, text, bubbleText });
+        }} />
+      </div>}
       {/* Input */}
       <div className="p-5 border-t border-stone-100 bg-white/80 backdrop-blur-sm flex-shrink-0">
         <div className="flex gap-2.5 items-end">
@@ -283,7 +302,7 @@ export default function ChatPanel({
               className="w-full min-h-[3.5rem] max-h-48 resize-none rounded-xl border border-stone-200 focus:border-brand-300 focus:ring-4 focus:ring-brand-100/50 transition-all duration-200 hover:border-stone-300 disabled:opacity-50 disabled:cursor-not-allowed pr-14"
               rows={1} />
           </div>
-          <Button aria-label="发送给 AI" onClick={onSend} disabled={loading || pipelineLoading || !inputValue.trim()}
+          <Button aria-label="发送给 AI" onClick={() => onSend()} disabled={loading || pipelineLoading || !inputValue.trim()}
             className="h-[3.5rem] w-[4.5rem] bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-700 hover:to-brand-600 text-white rounded-xl shadow-lg shadow-brand-200/50 hover-lift press-scale disabled:opacity-50 disabled:shadow-none disabled:hover-lift transition-all duration-300 flex items-center justify-center group">
             {loading ? <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Send className="w-5 h-5 transition-all duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />}
           </Button>

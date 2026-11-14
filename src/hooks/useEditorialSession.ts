@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { applyControlEvent, assertConfirmable } from '@/lib/editorialState';
 import { createEditorialSession, currentInputKey, hashText, type EditorialSession } from '@/lib/editorialTypes';
+import type { AnswerChoice } from '@/lib/editorialTypesV3';
 /** Single UI owner. Checkpoints are retained, but never grant an output capability. */
 export function useEditorialSession(sessionId: string) {
  const [session, setSession] = useState<EditorialSession>();
@@ -18,10 +19,10 @@ export function useEditorialSession(sessionId: string) {
   };
   return { runId, session: base, isCurrent, checkpoint };
  }, [sessionId, put]);
- const appendMessage = useCallback((text: string, messageId: string) => {
+ const appendMessage = useCallback((text: string, messageId: string, metadata?: { replyToBatchId?: string; slots?: { gapId: string; optionId?: string; value?: string; choice?: AnswerChoice }[] }) => {
   const s = structuredClone(latest.current ?? createEditorialSession(sessionId));
   if (!s.evidence.some(e => e.provenance.messageId === messageId)) {
-   s.evidence.push({ id: messageId, revision: 1, text, contentHash: hashText(text), kind: 'editor_message', provenance: {messageId}, context: {scenario:'unknown'} });
+   s.evidence.push({ id: messageId, revision: 1, text, contentHash: hashText(text), kind: 'editor_message', provenance: {messageId, ...(metadata?.replyToBatchId ? { replyToBatchId: metadata.replyToBatchId } : {}), ...(metadata?.slots ? { slots: metadata.slots } : {})}, context: {scenario:'unknown'} });
    s.evidenceRevision++; s.revision++; delete s.review; delete s.gate; s.humanVerifications=[]; s.selectedOutput='candidate';
   }
   put(s); return s;

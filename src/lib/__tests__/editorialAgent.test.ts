@@ -33,7 +33,7 @@ beforeEach(() => {
 });
 describe('editorial tool loop (default v2 runtime; legacy options adapter)', () => {
   it('blocks writing with missing registration details and asks for the actual gaps', async () => {
-    customize = (data, refs) => ({ factPatch: {}, taskPatch: { baseRevision: data.task.revision, refs, objective: '报名推文', intents: ['call_to_action'], requirements: ['活动时间','活动地点','报名方式','已确定的截止时间'].map((label,i) => ({ id: 'r'+i, selector: { scopeId: 'event', predicate: 'field'+i }, label, reason: '读者报名需要', refs, necessity: 'blocking', resolution: 'supply_fact' })) } });
+    customize = (data, refs) => ({ factPatch: {}, taskPatch: { baseRevision: data.task.revision, refs, objective: '报名推文', intents: ['call_to_action'], requirements: ['活动时间','活动地点','报名方式','已确定的截止时间'].map((label,i) => ({ id: 'r'+i, selector: { scopeId: 'event', predicate: 'field'+i }, label, reason: '读者报名需要', whyNeeded: '读者报名需要', refs, necessity: 'blocking', resolution: 'supply_fact' })) } });
     answer(write('写报名通知')); answer({ tool: 'ask', fields: ['detail'] }); const result = await runEditorialAgent(options('帮我写一篇读书会报名推文。'));
     expect(result.type).toBe('question'); if (result.type === 'question') for (const label of ['活动时间','活动地点','报名方式','截止时间']) expect(result.text).toContain(label);
     expect(model).toHaveBeenCalledTimes(3); expect(search).not.toHaveBeenCalled(); expect(read).not.toHaveBeenCalled();

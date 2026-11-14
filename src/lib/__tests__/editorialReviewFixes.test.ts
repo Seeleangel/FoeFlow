@@ -54,7 +54,7 @@ describe('phase A independent-review blockers', () => {
     s.permissions = [{ id: 'deny', subjectId: 'Alpha', uses: [use], state: 'denied', refs: [ref('Alpha')] }];
     expect(permissionAllows(s, 'Gamma', use)).toBe(false); expect(buildWriterContext(s).claims).toEqual([]);
     s.candidate = parseDraftArtifact('{"title":"Title","bodyMarkdown":"A verified quotation"}', { id: 'd', revision: 1 }).artifact!; expect(makePublicDocument(s).blockers.some(d => d.code === 'claim_permission')).toBe(true);
-    s.permissions[0].state = 'allowed'; s.task.requirements = [{ id: 'req', selector: { scopeId: 'Gamma', predicate: 'quotation' }, label: 'quote', reason: 'needed', refs: [ref('Gamma')], necessity: 'blocking', resolution: 'supply_fact' }];
+    s.permissions[0].state = 'allowed'; s.task.requirements = [{ id: 'req', selector: { scopeId: 'Gamma', predicate: 'quotation' }, label: 'quote', reason: 'needed', whyNeeded: 'needed', refs: [ref('Gamma')], necessity: 'blocking', resolution: 'supply_fact' }];
     expect(deriveGaps(s).find(g => g.requirementId === 'req')?.state).toBe('resolved');
     s.claims.push({ ...s.claims[0], id: 'q2', selector: { scopeId: 'Gamma', predicate: 'quotation' }, value: 'INTERNAL-STATE', refs: [ref('INTERNAL-STATE')] }); expect(buildWriterContext(s).claims).toEqual([]);
   });
@@ -79,7 +79,7 @@ describe('phase A independent-review majors', () => {
     const rejected = applyFactPatch(s, { claims: [invalid] }); expect(rejected.diagnostics.length).toBeGreaterThan(0);
     expect(applyFactPatch(rejected, { claims: [{ ...s.claims[0], id: 'unrelated' }] }).diagnostics.length).toBeGreaterThan(0);
     const repaired = applyFactPatch(rejected, { claims: [{ ...s.claims[0], id: 'bad' }] }); expect(repaired.diagnostics).toEqual([]);
-    const active = startEditorialRun(s, 'r'); const applied = applyToolEvents(active, [{ sessionId: 's', runId: 'r', expectedRevision: active.revision, type: 'facts_resolved', scopes: rejected.scopes, claims: rejected.claims, permissions: rejected.permissions, diagnostics: rejected.diagnostics }]); expect(applied.diagnostics).toEqual(rejected.diagnostics);
+    const active = startEditorialRun(s, 'r'); const applied = applyToolEvents(active, [{ sessionId: 's', runId: 'r', expectedRevision: active.revision, type: 'facts_resolved', scopes: rejected.scopes, claims: rejected.claims, permissions: rejected.permissions, diagnostics: rejected.diagnostics }]); expect(applied.diagnostics).toEqual([]);expect(applied.agentDiagnostics).toEqual(rejected.diagnostics.map(diagnostic=>({...diagnostic,gateEffect:'info'})));
   });
   it('M4 body-only rewrites retain a note ledger and cannot erase a known note leak', () => {
     const { s } = setup(); const active = startEditorialRun(s, 'r'); active.candidate = parseDraftArtifact(JSON.stringify({ title: 'Title', bodyMarkdown: 'Body', editorialNotes: [{ id: 'n', kind: 'process', text: 'INTERNAL-STATE', relatedIds: [] }] }), { id: 'd', revision: 1 }).artifact!;

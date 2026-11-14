@@ -1,9 +1,12 @@
 import { applyFactPatch } from './editorialFacts';
 import { taskContractValid, taskSnapshotMonotonic } from './editorialContract';
 import { validatePublicArtifact } from './editorialDocument';
-import { artifactContentHash, ControlEventSchema, EditorialSessionSchema, ToolEventSchema, sameEntitySet, hashText, stableJson, type EditorialSession, type EditorialToolEvent, type EditorialControlEvent, type EventEnvelope, currentInputKey, sameInputKey } from './editorialTypes';
+import { artifactContentHash, ControlEventSchema, EditorialSessionSchema, ToolEventSchema, sameEntitySet, hashText, stableJson, gateEffectOf, type EditorialSession, type EditorialToolEvent, type EditorialControlEvent, type EventEnvelope, currentInputKey, sameInputKey } from './editorialTypes';
 export { currentInputKey, sameInputKey } from './editorialTypes';
 import { validateAcceptance } from './editorialAcceptance';
+import { batchFromQuestion } from './editorialTurnState';
+import { buildQuestion, deriveGaps } from './editorialGaps';
+import type { GapDecision } from './editorialTypesV3';
 export function invalidateEditorialStamps(s: EditorialSession): EditorialSession {
   const next = structuredClone(s); delete next.review; delete next.layout; delete next.gate; next.humanVerifications = [];
   next.phase = next.candidate ? 'writing' : 'planning'; next.selectedOutput = 'candidate'; return next;
@@ -24,7 +27,7 @@ export function assertConfirmable(s: EditorialSession): void {
   if (!s.review || !sameInputKey(s.review.inputKey, key) || s.review.blocking.length || s.review.issues.some(i => i.severity === 'blocking') ||
       !s.gate || !sameInputKey(s.gate.inputKey, key) || s.gate.blockers.length || !s.gate.checks.length ||
       !s.layout || s.layout.contentHash !== key.contentHash || s.layout.htmlHash !== hashText(s.layout.html) ||
-      validateAcceptance(s, s.layout).blockers.length || s.gaps.some(g => g.blocking && (g.state === 'open' || g.state === 'asked')) || s.diagnostics.length) throw new Error('confirmation_blocked');
+      validateAcceptance(s, s.layout).blockers.length || s.gaps.some(g => g.blocking && (g.state === 'open' || g.state === 'asked')) || s.diagnostics.some(diagnostic => gateEffectOf(diagnostic) === 'block')) throw new Error('confirmation_blocked');
 }
 export function applyToolEvents(session: EditorialSession, events: readonly EditorialToolEvent[]): EditorialSession {
   const checked = events.map(e => ToolEventSchema.parse(e)); checked.forEach(e => ownership(session, e));
@@ -47,7 +50,11 @@ export function applyToolEvents(session: EditorialSession, events: readonly Edit
         const validated = applyFactPatch(s, { scopes: e.scopes, claims: e.claims, permissions: e.permissions, ...(e.alignments ? { alignments: e.alignments } : {}) });
         if (!sameEntitySet(validated.claims, e.claims) || !sameEntitySet(validated.permissions, e.permissions) || !sameEntitySet(validated.scopes, e.scopes) || e.alignments && !sameEntitySet(validated.alignments, e.alignments)) throw new Error('unsafe_fact_snapshot');
         const diagnostics = [...new Map([...validated.diagnostics,...e.diagnostics??[]].map(d=>[stableJson([d.owner,d.code,d.refs]),d])).values()];
-        if (!sameEntitySet(s.diagnostics, diagnostics)) { s = invalidateEditorialStamps(s); s.diagnostics = diagnostics; }
+        const blocks = diagnostics.filter(diagnostic => gateEffectOf(diagnostic) === 'block');
+        const agents = diagnostics.filter(diagnostic => gateEffectOf(diagnostic) !== 'block').map(diagnostic => ({ ...diagnostic, gateEffect: gateEffectOf(diagnostic) }));
+        const mergedAgents = [...new Map([...(s.agentDiagnostics ?? []), ...agents].map(d=>[stableJson([d.owner,d.code,d.message,d.refs]),d])).values()];
+        if (!sameEntitySet(s.agentDiagnostics ?? [], mergedAgents)) s.agentDiagnostics = mergedAgents;
+        if (!sameEntitySet(s.diagnostics, blocks)) { s = invalidateEditorialStamps(s); s.diagnostics = blocks; }
         if (sameEntitySet(s.scopes, e.scopes) && sameEntitySet(s.claims, e.claims) && sameEntitySet(s.permissions, e.permissions) && sameEntitySet(s.alignments, e.alignments ?? s.alignments)) break;
         s = invalidateEditorialStamps(s); s.scopes = e.scopes; s.claims = e.claims; s.permissions = e.permissions; s.alignments = e.alignments ?? s.alignments; s.evidenceRevision++; s.policyRevision++; break;
       }
@@ -56,7 +63,13 @@ export function applyToolEvents(session: EditorialSession, events: readonly Edit
         if (e.task.revision <= s.task.revision) throw new Error('invalid_task_revision');
         if (stableJson({ ...s.task, revision: 0 }) === stableJson({ ...e.task, revision: 0 })) break;
         s = invalidateEditorialStamps(s); s.task = e.task; break;
-      case 'diagnostics_updated': s = invalidateEditorialStamps(s); s.diagnostics = e.diagnostics; break;
+      case 'diagnostics_updated': {
+        const blocks = e.diagnostics.filter(diagnostic => gateEffectOf(diagnostic) === 'block');
+        const agents = e.diagnostics.filter(diagnostic => gateEffectOf(diagnostic) !== 'block').map(diagnostic => ({ ...diagnostic, gateEffect: gateEffectOf(diagnostic) }));
+        s = invalidateEditorialStamps(s); s.diagnostics = blocks;
+        s.agentDiagnostics = [...new Map([...(s.agentDiagnostics ?? []), ...agents].map(d=>[stableJson([d.owner,d.code,d.message,d.refs]),d])).values()];
+        break;
+      }
       case 'notes_recorded': s.editorialNotes = mergeEditorialNotes(s.editorialNotes ?? [], e.notes); if (s.candidate) s.candidate.editorialNotes = mergeEditorialNotes(s.candidate.editorialNotes, s.editorialNotes); break;
       case 'handoff_ready': assertConfirmable(s); s.phase = 'pending_confirmation'; break;
       case 'gaps_updated': s.gaps = e.gaps; break;
@@ -74,16 +87,73 @@ export function applyToolEvents(session: EditorialSession, events: readonly Edit
         validContent(s); if (e.layout.contentHash !== s.candidate!.contentHash || e.layout.htmlHash !== hashText(e.layout.html)) throw new Error('stale_layout'); s.layout = e.layout; break;
       case 'gate_recorded':
         if (!sameInputKey(e.gate.inputKey, currentInputKey(s))) throw new Error('stale_gate'); s.gate = e.gate; break;
-      case 'question_recorded': s.lastQuestion = e.question; s.gaps = s.gaps.map(g => e.question.gapIds.includes(g.id) ? { ...g, state: 'asked', askedAtMessageId: s.evidence.filter(record => record.kind === 'editor_message').slice(-1)[0]?.provenance.messageId } : g); s.phase = 'waiting_input'; break;
-      case 'stopped': s.phase = e.phase; s.lastStop = { code: e.code, unresolvedIds: e.unresolvedIds, nextActions: e.nextActions }; break;
+      case 'question_recorded': {
+        const batch = batchFromQuestion(s, e.question);
+        const messageId = s.evidence.filter(record => record.kind === 'editor_message').slice(-1)[0]?.provenance.messageId;
+        s.questionBatches = [...(s.questionBatches ?? []).filter(existing => existing.id !== batch.id), batch];
+        s.activeBatchId = batch.id;
+        s.gaps = s.gaps.map(gap => {
+          if (!e.question.gapIds.includes(gap.id)) return gap;
+          const history = gap.askHistory ?? [];
+          const entry = { batchId: batch.id, messageId: messageId ?? batch.createdAtMessageId, promptHash: hashText(gap.label + '\n' + gap.reason), reasonCode: 'question_opened' };
+          return { ...gap, state: 'asked', askHistory: history.some(item => item.batchId === batch.id) ? history : [...history, entry] };
+        });
+        s.phase = 'waiting_input'; break;
+      }
+      case 'agent_diagnostic_recorded': {
+        const diagnostic = { ...e.diagnostic, gateEffect: gateEffectOf(e.diagnostic) };
+        const key = stableJson([diagnostic.owner ?? '', diagnostic.code, diagnostic.message, diagnostic.refs]);
+        const current = s.agentDiagnostics ?? [];
+        if (!current.some(item => stableJson([item.owner ?? '', item.code, item.message, item.refs]) === key)) s.agentDiagnostics = [...current, diagnostic];
+        break;
+      }
+      case 'stopped': s.phase = e.phase; break;
     }
   }
   s.revision++; return s;
 }
+/** Program-side batch opener for failure actions: no model call, no evidence write, no EditorTurn. */
+export function openQuestionBatch(session: EditorialSession, gapIds: string[]): EditorialSession {
+  const s = structuredClone(session);
+  s.gaps = deriveGaps(s);
+  const question = buildQuestion(s, gapIds);
+  const batch = batchFromQuestion(s, question);
+  const messageId = batch.createdAtMessageId;
+  s.questionBatches = [...(s.questionBatches ?? []).filter(existing => existing.id !== batch.id), batch];
+  s.activeBatchId = batch.id;
+  s.gaps = s.gaps.map(gap => batch.gapIds.includes(gap.id) ? {
+    ...gap, state: 'asked' as const,
+    askHistory: [...(gap.askHistory ?? []), { batchId: batch.id, messageId, promptHash: hashText(gap.label + '\n' + gap.reason), reasonCode: 'program_open' }],
+  } : gap);
+  s.phase = 'waiting_input';
+  s.revision++;
+  return s;
+}
+
+/** Editor waiver of unresolved gaps from a failure card; closes them without a model run. */
+export function deferGaps(session: EditorialSession, gapIds: string[], note = '编辑选择按现有信息继续'): EditorialSession {
+  const unique = [...new Set(gapIds)];
+  if (!unique.length) return structuredClone(session);
+  const s = structuredClone(session);
+  const createdAt = new Date().toISOString();
+  const messageId = 'editor-defer-' + hashText([s.sessionId, ...unique, s.revision].join(':')).slice(0, 24);
+  const labels = unique.map(id => s.gaps.find(gap => gap.id === id)?.label ?? id);
+  const text = note + '：' + labels.join('、');
+  s.evidence = [...s.evidence, { id: messageId, revision: 1, text, contentHash: hashText(text), kind: 'editor_message', provenance: { messageId }, context: { scenario: 'unknown' } }];
+  s.evidenceRevision++;
+  const refs = [{ evidenceId: messageId, revision: 1, start: 0, end: text.length, quote: text }];
+  const decisions: GapDecision[] = unique.map(gapId => ({ id: 'gd-' + hashText(gapId + ':defer:' + messageId).slice(0, 24), gapId, by: 'editor', kind: 'defer', refs, note, createdAt }));
+  s.gapDecisions = [...(s.gapDecisions ?? []), ...decisions];
+  s.gaps = s.gaps.map(gap => unique.includes(gap.id) ? { ...gap, state: 'waived' as const } : gap);
+  delete s.review; delete s.layout; delete s.gate; s.humanVerifications = []; s.selectedOutput = 'candidate';
+  s.revision++;
+  return s;
+}
+
 /** Control entry is intentionally separate from the model/tool port. */
 export function applyControlEvent(session: EditorialSession, event: EditorialControlEvent): EditorialSession {
   const e = ControlEventSchema.parse(event); ownership(session, e); const s = EditorialSessionSchema.parse(session);
-  if (e.type === 'run_cancelled') { delete s.activeRunId; s.phase = 'incomplete'; }
+  if (e.type === 'run_cancelled') { delete s.activeRunId; s.phase = 'incomplete'; if (s.lastRun) s.lastRun = { ...s.lastRun, outcome: 'cancelled' }; }
   else if (e.type === 'human_verified') {
     if (!sameInputKey(e.verification.inputKey, currentInputKey(s)) || !s.task.criteria.some(c => c.id === e.verification.criterionId && (c.verification !== 'deterministic' || c.rule.kind === 'semantic'))) throw new Error('invalid_human_verification');
     s.humanVerifications = [...s.humanVerifications.filter(v => v.criterionId !== e.verification.criterionId), e.verification]; delete s.gate;

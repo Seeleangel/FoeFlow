@@ -13,7 +13,7 @@ describe('evidence-backed task revisions', () => {
   it('keeps reminders/comments free of invented time, location, deadline or registration defaults', () => {
     const { s, patch } = fixture(); const reminder = applyTaskPatch(s, patch); expect(reminder.task.requirements).toEqual([]);
     const comment = applyTaskPatch(s, { ...patch, intents: ['other'] }); expect(comment.task.requirements).toEqual([]);
-    const action = applyTaskPatch(s, { ...patch, intents: ['call_to_action'], readerAction: 'Register using the supplied channel', requirements: [{ id: 'channel', selector: { scopeId: 'event', predicate: 'channel' }, label: 'Registration channel', reason: 'Reader needs an executable action', refs: patch.refs, necessity: 'blocking', resolution: 'supply_fact' }] });
+    const action = applyTaskPatch(s, { ...patch, intents: ['call_to_action'], readerAction: 'Register using the supplied channel', requirements: [{ id: 'channel', selector: { scopeId: 'event', predicate: 'channel' }, label: 'Registration channel', reason: 'Reader needs an executable action', whyNeeded: 'Reader needs an executable action', refs: patch.refs, necessity: 'blocking', resolution: 'supply_fact' }] });
     expect(action.task.requirements.map(r => r.selector.predicate)).toEqual(['channel']);
   });
   it('cannot delete or weaken obligations via a model patch, even with copied editor refs', () => {

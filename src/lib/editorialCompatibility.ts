@@ -1,4 +1,4 @@
-import { createEditorialSession, EditorialSessionSchema, hashText, type EditorialSession } from './editorialTypes';
+import { annotateDiagnostics, createEditorialSession, EditorialSessionSchema, hashText, type EditorialSession } from './editorialTypes';
 /** Read-time, non-destructive migration. No v2 stamps or confirmation are invented. */
 export function normalizeLegacySession(raw: unknown): EditorialSession {
   if (EditorialSessionSchema.is(raw)) return EditorialSessionSchema.parse(raw);
@@ -17,6 +17,6 @@ export function normalizeLegacySession(raw: unknown): EditorialSession {
   const session = createEditorialSession(text(outer.id) || 'legacy-' + hashText(body + html).slice(0, 20));
   session.legacy = { mode, title, text: body, html, confirmed, originalConfirmation: confirmed ? structuredClone(state.editorial) : undefined, raw: structuredClone(raw) };
   session.phase = body ? 'incomplete' : 'planning';
-  session.diagnostics = [{ owner: 'compatibility', code: damaged ? 'legacy_damaged' : 'legacy_requires_validation', message: 'Historical snapshot retained; no v2 review or confirmation granted.', refs: [] }];
+  session.diagnostics = annotateDiagnostics([{ owner: 'compatibility', code: damaged ? 'legacy_damaged' : 'legacy_requires_validation', message: 'Historical snapshot retained; no v2 review or confirmation granted.', refs: [] }]);
   return session;
 }

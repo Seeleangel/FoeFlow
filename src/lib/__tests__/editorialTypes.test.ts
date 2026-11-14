@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createEditorialSession, EditorialSessionSchema, ToolEventSchema, ToolActionSchema, RunBudgetSchema, DEFAULT_RUN_BUDGET, hashText } from '../editorialTypes';
+import { createEditorialSession, EditorialOutcomeSchema, EditorialSessionSchema, ToolEventSchema, ToolActionSchema, RunBudgetSchema, DEFAULT_RUN_BUDGET, hashText } from '../editorialTypes';
 describe('v2 runtime contracts', () => {
   it('validates the complete state, not just the version tag', () => {
     const s = createEditorialSession('s');
@@ -16,6 +16,14 @@ describe('v2 runtime contracts', () => {
     expect(() => RunBudgetSchema.parse({ ...DEFAULT_RUN_BUDGET, modelCalls: -1 })).toThrow();
     expect(ToolActionSchema.parse({ tool: 'read', documentId: 'd', sourceRequirementId: 's' }).tool).toBe('read');
     expect(() => ToolActionSchema.parse({ tool: 'confirm' })).toThrow();
+  });
+  it('accepts a question outcome with an optional notice', () => {
+    const session = createEditorialSession('s');
+    const question = { id: 'q', gapIds: [], items: [] };
+    const withoutNotice = EditorialOutcomeSchema.parse({ type: 'question', session, question });
+    const withNotice = EditorialOutcomeSchema.parse({ type: 'question', session, question, notice: '该回答属于已过期的问题批次。' });
+    expect(withoutNotice.type === 'question' ? withoutNotice.notice : undefined).toBeUndefined();
+    expect(withNotice.type === 'question' ? withNotice.notice : undefined).toBe('该回答属于已过期的问题批次。');
   });
   it('hashes with portable SHA-256', () => {
     expect(hashText('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
