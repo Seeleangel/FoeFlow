@@ -16,9 +16,36 @@ describe('scoped evidence resolution', () => {
     s.claims.reverse(); expect(resolveFacts(s).conflicts).toEqual([]);
     s.claims[0].selector.scopeId = s.claims[1].selector.scopeId; expect(resolveFacts(s).conflicts[0].kind).toBe('conflict');
   });
+  it('treats references the editor listed together as complementary, while an explicit either/or stays a conflict', () => {
+    const text = '参考第一份导读和第二份材料，写给新生。'; const s = createEditorialSession('s');
+    s.evidence = [{ id: 'e', revision: 1, contentHash: hashText(text), text, kind: 'editor_message', provenance: { messageId: 'm' }, context: { scenario: 'real' } }];
+    const ref = (quote: string): EvidenceRef => ({ evidenceId: 'e', revision: 1, start: text.indexOf(quote), end: text.indexOf(quote) + quote.length, quote });
+    s.scopes = [{ id: 's0', kind: 'other', label: '新生', anchors: [ref('新生')], qualifiers: [], identity: 'aligned' }];
+    s.claims = ['第一份导读', '第二份材料'].map((value, i): FactClaim => ({ id: 'c' + i, selector: { scopeId: 's0', predicate: '参考来源' }, value, refs: [ref(value)], epistemic: 'supported', visibility: 'public', statusBasis: [] }));
+    expect(resolveFacts(s).conflicts.filter(gap => gap.kind === 'conflict')).toHaveLength(0);
+    const either = text.replace('和', '或'); s.evidence[0] = { ...s.evidence[0], text: either, contentHash: hashText(either) };
+    expect(resolveFacts(s).conflicts.filter(gap => gap.kind === 'conflict')).toHaveLength(1);
+  });
   it('does not ignore provisional scope ambiguity', () => {
     const { s } = fixture(); s.scopes.forEach(scope => { scope.identity = 'provisional'; }); s.task.targetScopes = ['s0', 's1'];
     expect(resolveFacts(s).conflicts.filter(g => g.kind === 'scope')).toHaveLength(2);
+  });
+  it('does not invent an identity gap for a lone provisional scope from one authoritative editor message', () => {
+    const { s } = fixture(['Orchid'], ['Tuesday']); s.scopes[0].identity = 'provisional'; s.task.targetScopes = ['s0'];
+    expect(resolveFacts(s).conflicts.filter(g => g.kind === 'scope')).toHaveLength(0);
+  });
+  it('does not treat the synthetic editor scope as a rival identity for a provisional content scope', () => {
+    const { s, ref } = fixture(['Orchid'], ['Tuesday']); s.scopes[0].identity = 'provisional'; s.task.targetScopes = ['s0'];
+    s.scopes.unshift({ id: 'editor', kind: 'other', label: '编辑消息', anchors: [ref('Orchid')], qualifiers: [], identity: 'aligned' });
+    s.scopes[0].kind = 'other';
+    expect(resolveFacts(s).conflicts.filter(g => g.kind === 'scope')).toHaveLength(0);
+  });
+  it('does not treat preview-confirmation authorization scopes as rival identities for a content scope', () => {
+    const { s, ref } = fixture(['Orchid'], ['Tuesday']); s.scopes[0].identity = 'provisional'; s.task.targetScopes = ['s0'];
+    s.scopes[0].kind = 'other';
+    s.scopes.push({ id: 'authorization:' + 'a'.repeat(12), kind: 'other', label: 'The editor will confirm in preview', anchors: [ref('Orchid')], qualifiers: [], identity: 'aligned' });
+    s.scopes.push({ id: 'authorization:' + 'b'.repeat(12), kind: 'other', label: 'The editor will confirm in preview', anchors: [ref('Orchid')], qualifiers: [], identity: 'aligned' });
+    expect(resolveFacts(s).conflicts.filter(g => g.kind === 'scope')).toHaveLength(0);
   });
   it('splitting one anchored identity into duplicate scope IDs creates an alignment gap, not a conflict escape', () => {
     const { s } = fixture(); s.scopes[1].anchors = s.scopes[0].anchors; s.task.targetScopes = ['s0', 's1'];

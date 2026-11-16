@@ -25,11 +25,35 @@ describe('acceptance is task-specific and fail closed', () => {
     setBody(s, ['Monday Studio', 'Other'], ['heading', 'paragraph']); expect(validateAcceptance(s).blockers).toContain('lead');
     s.task.criteria = []; expect(validateAcceptance(s).blockers).not.toContain('lead');
   });
+  it('separates requirement ids and unknown ids inside an include_facts criterion', () => {
+    const { s, ref } = fixture();
+    // Live extraction sometimes lists requirement ids as facts; requirements have their own checks.
+    s.task.requirements = [{ id: 'req-time', selector: { scopeId: 'event', predicate: 'time' }, label: 'Monday', reason: 'Editor supplied the time', refs: [ref('Monday')], necessity: 'blocking', resolution: 'supply_fact' }];
+    s.task.criteria[0].rule = { kind: 'include_facts', factIds: ['c0', 'req-time'], location: 'first_body_paragraph' };
+    const mapped = validateAcceptance(s).checks.find(item => item.criterionId === 'lead');
+    expect(mapped?.status).toBe('pass'); expect(mapped?.detail).toContain('task requirements'); expect(validateAcceptance(s).blockers).toEqual([]);
+    // An id that resolves to nothing cannot be checked, but the live model may have named the same
+    // fact differently: report it as a handoff note, not as a delivery blocker.
+    s.task.criteria[0].rule = { kind: 'include_facts', factIds: ['c0', 'never-extracted'], location: 'first_body_paragraph' };
+    const unknown = validateAcceptance(s).checks.find(item => item.criterionId === 'lead');
+    expect(unknown?.status).toBe('unknown'); expect(unknown?.detail).toContain('never-extracted'); expect(unknown?.detail).toContain('无法机械核验'); expect(validateAcceptance(s).blockers).not.toContain('lead');
+  });
+  it('counts a registered fact that the artifact delivers as its title', () => {
+    const { s } = fixture();
+    setBody(s, ['Studio only.']); // 'Monday' is delivered by the candidate title "Monday Studio"
+    s.task.criteria[0].rule = { kind: 'include_facts', factIds: ['c0', 'c1'], location: 'body' };
+    expect(validateAcceptance(s).checks.find(item => item.criterionId === 'lead')?.status).toBe('pass');
+  });
   it('checks the actual rendered paragraph and detects stale or altered HTML', () => {
     const { s } = fixture(); const layout = renderPublicDocument(makePublicDocument(s).document!, getDefaultTheme());
     expect(validateAcceptance(s, layout).blockers).toEqual([]);
     const changed = '<article><h1>Monday Studio</h1><p data-editorial-block="b0">Monday</p><p>Studio</p></article>';
     expect(validateAcceptance(s, { ...layout, html: changed, htmlHash: hashText(changed) }).blockers.length).toBeGreaterThan(0);
+  });
+  it('does not treat markdown markup in later blocks as missing rendered text', () => {
+    const { s } = fixture(); setBody(s, ['Section', 'Monday at Studio.'], ['heading', 'paragraph']);
+    const layout = renderPublicDocument(makePublicDocument(s).document!, getDefaultTheme());
+    expect(validateAcceptance(s, layout).blockers).not.toContain('layout_integrity');
   });
   it('rejects hidden paragraphs and unauthorized active/layout-only elements even when visible text hashes appear to match', () => {
     const { s } = fixture(); const blockId = s.candidate!.blocks[0].id;
@@ -44,12 +68,23 @@ describe('acceptance is task-specific and fail closed', () => {
     const { s, c } = fixture(); s.task.criteria = [{ ...c, id: 'len', rule: { kind: 'length', min: 14, max: 16, unit: 'visible_characters' } }, { ...c, id: 'keep', rule: { kind: 'preserve_blocks', blockHashes: [hashText('Monday at Studio.')] } }];
     expect(validateAcceptance(s).blockers).toEqual([]); setBody(s, ['Changed']); expect(validateAcceptance(s).blockers).toEqual(expect.arrayContaining(['len', 'keep']));
   });
-  it('semantic/human unknown is blocking; only editor can clear human-pending checks for the same key', () => {
+  it('human-verification checks travel with the handoff instead of blocking delivery; only the editor can pass them', () => {
     const { s, c } = fixture(); s.task.criteria = [{ ...c, id: 'human', verification: 'human', rule: { kind: 'semantic', instruction: 'Verify tone' } }];
-    expect(validateAcceptance(s).checks.find(c => c.criterionId === 'human')?.status).toBe('unknown');
-    s.review = { inputKey: currentInputKey(s), issues: [], blocking: [], notes: [] }; expect(validateAcceptance(s).blockers).toContain('human');
-    s.humanVerifications = [{ criterionId: 'human', inputKey: currentInputKey(s), status: 'pass', actor: 'editor', verifiedAt: 'now' }]; expect(validateAcceptance(s).blockers).toEqual([]);
-    s.task.revision++; expect(validateAcceptance(s).blockers).toContain('human');
+    const human = () => validateAcceptance(s).checks.find(c => c.criterionId === 'human');
+    expect(human()?.status).toBe('unknown'); expect(human()?.detail).toContain('待编辑人工确认');
+    expect(validateAcceptance(s).blockers).not.toContain('human');
+    // A model pass cannot clear a human check for the same key.
+    s.review = { inputKey: currentInputKey(s), issues: [], blocking: [], notes: [] }; expect(human()?.status).toBe('unknown');
+    s.humanVerifications = [{ criterionId: 'human', inputKey: currentInputKey(s), status: 'pass', actor: 'editor', verifiedAt: 'now' }]; expect(human()?.status).toBe('pass');
+    s.task.revision++; expect(human()?.status).toBe('unknown');
+  });
+  it('treats an undecidable semantic review as a pending handoff note, while an explicit fail still blocks', () => {
+    const { s, c } = fixture(); s.task.criteria = [{ ...c, id: 'channel', verification: 'semantic', rule: { kind: 'semantic', instruction: 'Match an unspecified channel and length' } }];
+    const check = (status: 'unknown' | 'fail') => { s.review = { inputKey: currentInputKey(s), issues: [], blocking: [], notes: [], criterionChecks: [{ criterionId: 'channel', status, verifier: 'semantic', detail: '任务未给出渠道与篇幅。' }] }; return validateAcceptance(s); };
+    const unknown = check('unknown');
+    expect(unknown.checks.find(item => item.criterionId === 'channel')?.detail).toContain('待人工确认');
+    expect(unknown.blockers).not.toContain('channel');
+    expect(check('fail').blockers).toContain('channel');
   });
   it('search/source self-report does not satisfy reading; a valid consumed receipt does; new version invalidates it', () => {
     const { s, ref, c } = fixture(); s.task.requiredSources = [{ id: 'src', selector: { documentId: 'doc' }, purpose: 'compare', refs: [ref('Read reference.')], depth: 'full_document', state: 'satisfied' }];

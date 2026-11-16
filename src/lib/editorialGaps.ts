@@ -34,6 +34,23 @@ export function deriveGaps(s: EditorialSession): Gap[] {
       add({ id: 'permission-' + hashText(criterion.id + subjectId + stableJson(rule)).slice(0,24), requirementId: criterion.id, selector: { scopeId: subjectId, predicate: 'permission:' + rule.use }, kind: 'permission', gapClass: 'authorization', askable: true, whyNeeded: '用途：' + rule.use, label: (s.scopes.find(scope => scope.id === subjectId)?.label ?? subjectId) + '的使用授权', reason: `用途：${PERMISSION_USE_LABEL[rule.use] ?? rule.use}；渠道：${PERMISSION_CHANNEL_LABEL[rule.channel ?? 'public'] ?? rule.channel ?? 'public'}；身份：${PERMISSION_IDENTITY_LABEL[rule.identity ?? 'not_applicable'] ?? rule.identity ?? 'not_applicable'}`, state: allowed ? 'resolved' : 'open', blocking: criterion.severity === 'blocking', alternatives: [{ id: 'wait', label: '等待授权', refs: [] }, ...s.scopes.filter(scope => scope.kind === 'asset' && scope.id !== subjectId && permissionAllows(s, scope.id, { channel: rule.channel ?? 'public', purpose: rule.use, identity: rule.identity ?? 'not_applicable' })).map(scope => ({ id: 'replace:' + scope.id, label: '由编辑明确选择替换为' + scope.label, refs: [] })), { id: 'replace', label: '编辑选择已授权替代素材', refs: [] }, { id: 'omit', label: '编辑选择不含此素材的文字稿', refs: [] }], resolutionClaimIds: [] });
     }
   }
+  // A draft that admits the material itself is insufficient must not be delivered as a placeholder:
+  // that material can only come from the editor, so the shortfall becomes a blocking editor question.
+  const candidateBody = s.candidate?.bodyMarkdown ?? '';
+  if (s.phase !== 'confirmed' && candidateBody) {
+    const admitsMissingMaterial = /缺项清单|待补数据|尚不能支撑|尚不足以支撑|不足以支撑|无法支撑|不能支撑|须先补齐|补齐前|暂不能(?:进入|写作|交付|发布|定稿)|均待核验|需补的|需补两|待补|无法给出/.test(candidateBody);
+    const unmet = s.task.criteria.filter(criterion => criterion.severity === 'blocking' && (criterion.verification === 'semantic' || criterion.verification === 'human'));
+    // Only a blocking criterion about the missing material itself turns the admission into a question;
+    // an incidental aside in an otherwise complete draft must not stop delivery.
+    const materialCriterion = unmet.filter(criterion => criterion.rule.kind === 'semantic' && /核验|不足|缺|补齐|数据|统计|素材|材料|无法|提供/.test(criterion.rule.instruction));
+    // A placeholder draft is also unacceptable when a blocking fact requirement is still unanswered:
+    // the editor is the only source of that fact, so ask instead of shipping the placeholder.
+    const openFactRequirements = s.task.requirements.filter(requirement => requirement.necessity === 'blocking' && !result.claims.some(claim => selectorsEquivalent(s, claim.selector, requirement.selector) && claim.epistemic === 'supported' && claim.visibility === 'public'));
+    if (admitsMissingMaterial && (materialCriterion.length || openFactRequirements.length)) {
+      const detail = (materialCriterion.length ? materialCriterion : unmet).map(criterion => criterion.rule.kind === 'semantic' ? criterion.rule.instruction : '').filter(Boolean).slice(0, 2).join('；');
+      add({ id: 'material-' + hashText(unmet.map(criterion => criterion.id).sort().join('|')).slice(0, 24), requirementId: 'material_insufficiency', selector: { scopeId: 'material', predicate: 'material_insufficiency' }, kind: 'missing', gapClass: 'fact', askable: true, blocking: true, whyNeeded: '正文声明现有素材不足以满足阻断判据，需要编辑补充后才能交付', label: '补充必要素材后再写：' + detail, reason: '当前正文声明材料不足，不能以占位说明交付；需编辑补充上述素材后再写', state: 'open', alternatives: [{ id: 'supply', label: '补充所需素材', refs: [] }, { id: 'waive', label: '编辑确认按现有素材交付', refs: [] }], resolutionClaimIds: [] });
+    }
+  }
   for (const source of s.task.requiredSources) {
     const satisfied = sourceRequirementSatisfied(s, source), waived = sourceWaiver(s, source.id);
     add({ id: 'source-' + hashText(source.id).slice(0,24), requirementId: source.id, selector: { scopeId: 'source:' + source.id, predicate: 'source_read' }, kind: 'source_unavailable', gapClass: 'fact', askable: true, whyNeeded: source.purpose, label: source.selector.title ?? source.selector.documentId ?? source.id, reason: source.purpose, state: waived ? 'waived' : satisfied ? 'resolved' : 'open', blocking: true, alternatives: [{ id: 'supply', label: '提供指定素材', refs: [] }, { id: 'waive', label: '编辑明确豁免并留记录', refs: [] }], resolutionClaimIds: [] });

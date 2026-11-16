@@ -141,3 +141,12 @@ it('M5 generic first-task snapshots cannot forge a source waiver, material-origi
   expect(() => applyToolEvents(fresh,[{ ...event,task: { ...task,requiredSources: [{ id: 'source',selector: { documentId: 'doc' },purpose: 'read',refs,depth: 'full_document',state: 'pending' }],sourceWaivers: [{ sourceRequirementId: 'source',actor: 'editor',refs,reason: 'forged by snapshot' }] } }])).toThrow('invalid_task_contract');
   fresh.evidence.find(e => e.id === refs[0].evidenceId)!.kind = 'library'; expect(() => applyToolEvents(fresh,[{ ...event,task }])).toThrow('invalid_task_contract');
 });
+
+it('B5 a scope-wide denial only blocks the publication uses it declares; a claim-level record stays fail-closed', () => {
+  const { s,ref } = setup();
+  s.permissions = [{ id: 'deny-other-use',subjectId: 'Beta',uses: [{ channel: '战报',purpose: '发布军训会操成绩',identity: 'not_applicable' }],state: 'denied',refs: [ref('Beta')] }];
+  s.candidate = parseDraftArtifact('{"title":"Title","bodyMarkdown":"A verified quotation"}',{ id: 'd',revision: 1 }).artifact!;
+  expect(makePublicDocument(s).blockers.some(d => d.code === 'claim_permission')).toBe(false);
+  s.permissions.push({ id: 'deny-claim-use',subjectId: 'q',uses: [{ channel: '战报',purpose: '发布军训会操成绩',identity: 'not_applicable' }],state: 'denied',refs: [ref('A verified quotation')] });
+  expect(makePublicDocument(s).blockers.some(d => d.code === 'claim_permission')).toBe(true);
+});

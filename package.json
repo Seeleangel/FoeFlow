@@ -17,6 +17,7 @@
     "test": "vitest",
     "test:e2e": "playwright test",
     "editorial:eval": "node scripts/editorial-eval/cli.mjs",
+    "editorial:score": "node scripts/editorial-eval/cli-score.mjs",
     "editorial:regression": "vitest run src/lib/__tests__/editorialReplays.test.ts src/lib/__tests__/editorialLegacyReplays.test.ts src/lib/__tests__/editorialDevelopmentMocks.test.ts",
     "test:editorial-ui": "playwright test tests/e2e/editorial-confirmation.spec.ts"
   },

@@ -46,11 +46,25 @@ export function validateAnswerMappings(batch: QuestionBatch, text: string, raw: 
     const end = typeof value.end === 'number' && Number.isInteger(value.end) ? value.end : undefined;
     const quote = typeof value.quote === 'string' ? value.quote : undefined;
     const confidence = typeof value.confidence === 'number' && Number.isFinite(value.confidence) ? value.confidence : 1;
-    if (!gapId || !itemIds.has(gapId) || usedGaps.has(gapId) || start === undefined || end === undefined || !quote || !quote.trim() ||
-        start < 0 || end <= start || end > text.length || text.slice(start, end) !== quote || confidence < 0.5 ||
-        accepted.some(mapping => start < mapping.end && mapping.start < end)) { rejected++; continue; }
+    let span: { start: number; end: number } | undefined = start !== undefined && end !== undefined && start >= 0 && end > start && end <= text.length && text.slice(start, end) === quote
+      ? { start, end }
+      : undefined;
+    if (!span && quote && quote.trim()) {
+      // Mapping models often get the offsets slightly wrong (for example they leave out the trailing
+      // punctuation). Locate the exact quote instead of dropping a real answer into a re-ask.
+      const occurrences: number[] = [];
+      for (let index = text.indexOf(quote); index >= 0; index = text.indexOf(quote, index + 1)) occurrences.push(index);
+      const free = occurrences.filter(index => !accepted.some(mapping => index < mapping.end && mapping.start < index + quote.length));
+      const chosen = free.length === 1 ? free[0]
+        : free.length > 1 && start !== undefined ? free.reduce((best, index) => Math.abs(index - start) < Math.abs(best - start) ? index : best, free[0])
+        : undefined;
+      if (chosen !== undefined) span = { start: chosen, end: chosen + quote.length };
+    }
+    const resolved = span;
+    if (!gapId || !itemIds.has(gapId) || usedGaps.has(gapId) || !resolved || !quote || !quote.trim() || confidence < 0.5 ||
+        accepted.some(mapping => resolved.start < mapping.end && mapping.start < resolved.end)) { rejected++; continue; }
     usedGaps.add(gapId);
-    accepted.push({ gapId, start, end, quote, confidence });
+    accepted.push({ gapId, start: resolved.start, end: resolved.end, quote, confidence });
   }
   return { mappings: accepted, rejected, shapeValid: true };
 }

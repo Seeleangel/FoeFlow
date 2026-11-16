@@ -47,6 +47,7 @@ export function normalizeModelExtraction(session: EditorialSession, raw: Record<
   );
   if (directiveTask && hasDirectiveTask) taskPatch = mergeTaskPatches(session, taskPatch, directiveTask);
   if (taskPatch && constraints.length) taskPatch = guardTaskPatchRequirements(taskPatch, constraints, diagnostics);
+  if (taskPatch) taskPatch = guardOutputRequirements(session, taskPatch, diagnostics);
   if (taskPatch) next.taskPatch = taskPatch;
   if (raw.editorialNotes !== undefined) next.editorialNotes = normalizeNotes(raw.editorialNotes);
   if (diagnostics.length) next.diagnostics = diagnostics;
@@ -58,13 +59,27 @@ function id(value: unknown): string | undefined { return typeof value === 'strin
 function obj(value: unknown): Record<string, unknown> | undefined { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 
 function repairRef(session: EditorialSession, raw: unknown): EvidenceRef | undefined {
-  const ref = obj(raw); const evidenceId = id(ref?.evidenceId); const quote = typeof ref?.quote === 'string' ? ref.quote : '';
-  if (!evidenceId || !quote || typeof ref?.revision !== 'number' || !Number.isInteger(ref.revision)) return;
-  const source = session.evidence.find(e => e.id === evidenceId && e.revision === ref.revision);
+  const ref = obj(raw); const evidenceId = id(ref?.evidenceId) ?? id(ref?.refId); const quote = typeof ref?.quote === 'string' ? ref.quote : '';
+  // Models legitimately abbreviate the protocol: refId instead of evidenceId, or no revision at all.
+  // Accept both shapes when the quote still anchors to exactly one evidence record; never invent text.
+  if (!evidenceId) return;
+  const revision = typeof ref?.revision === 'number' && Number.isInteger(ref.revision) ? ref.revision : undefined;
+  const source = revision === undefined ? session.evidence.find(e => e.id === evidenceId) : session.evidence.find(e => e.id === evidenceId && e.revision === revision);
   if (!source) return;
-  const start = source.text.indexOf(quote);
-  if (start < 0) return;
-  return { evidenceId, revision: ref.revision, start, end: start + quote.length, quote };
+  const evidenceRevision = source.revision;
+  if (quote) {
+    const start = source.text.indexOf(quote);
+    if (start < 0) return;
+    return { evidenceId, revision: evidenceRevision, start, end: start + quote.length, quote };
+  }
+  // Live models sometimes emit refs with an empty quote. An empty quote must never
+  // discard the whole obligation: fall back to the exact span the model pointed at,
+  // or to the full evidence span, so the claim stays grounded and the task survives.
+  const start = typeof ref?.start === 'number' && Number.isInteger(ref.start) ? ref.start : -1;
+  const end = typeof ref?.end === 'number' && Number.isInteger(ref.end) ? ref.end : -1;
+  if (start >= 0 && end > start && end <= source.text.length) return { evidenceId, revision: evidenceRevision, start, end, quote: source.text.slice(start, end) };
+  if (!source.text.length) return;
+  return { evidenceId, revision: evidenceRevision, start: 0, end: source.text.length, quote: source.text };
 }
 function repairRefs(session: EditorialSession, raw: unknown): EvidenceRef[] {
   const seen = new Set<string>(); const refs: EvidenceRef[] = [];
@@ -88,7 +103,10 @@ function editorSpan(session: EditorialSession): EvidenceRef | undefined {
 
 function normalizeScope(session: EditorialSession, raw: unknown): Record<string, unknown>[] {
   const scope = obj(raw); const scopeId = id(scope?.id); const label = id(scope?.label); if (!scope || !scopeId || !label) return [];
-  const anchors = repairRefs(session, scope.anchors); if (!anchors.length) return [];
+  // Live models sometimes wrap anchors as { refs: [...], text: "..." } instead of a flat ref.
+  // Flatten that shape so a valid scope is not dropped (and its claims with it).
+  const anchorItems = items(scope.anchors).flatMap(item => { const anchor = obj(item); return anchor && anchor.refs !== undefined ? items(anchor.refs) : [item]; });
+  const anchors = repairRefs(session, anchorItems); if (!anchors.length) return [];
   const kind = (SCOPE_KINDS as readonly string[]).includes(String(scope.kind)) ? scope.kind : 'other';
   const qualifierObject = obj(scope.qualifiers);
   const qualifiers = Array.isArray(scope.qualifiers)
@@ -96,14 +114,60 @@ function normalizeScope(session: EditorialSession, raw: unknown): Record<string,
     : qualifierObject ? Object.entries(qualifierObject).flatMap(([key, value]) => id(key) && (typeof value === 'string' || typeof value === 'number') ? [{ key, value: String(value), refs: anchors }] : []) : [];
   return [{ id: scopeId, kind, label, anchors, qualifiers, identity: scope.identity === 'aligned' ? 'aligned' : 'provisional' }];
 }
+/** Models often normalize an editor's date into ISO; fact values must stay anchored to the source spelling. */
+function claimValue(value: string, refs: EvidenceRef[]): string {
+  const squash = (text: string): string => text.replace(/\s+/g, '');
+  if (refs.some(ref => squash(ref.quote).includes(squash(value)))) return value;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) {
+    for (const ref of refs) {
+      const match = ref.quote.match(/(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日(?:\s*\d{1,2}:\d{2})?/);
+      const fragment = match ? match[0].trim() : '';
+      if (fragment && refs.some(candidate => squash(candidate.quote).includes(squash(fragment)))) return fragment;
+    }
+  }
+  return value;
+}
+/** Re-anchor a claim whose model-selected quote does not actually contain its value.
+ * Ref drift is extremely common in live output ("quote":"帮" for a paragraph of facts); the claim must stay
+ * grounded, so pick the exact occurrence of the value in the untouched evidence text instead of dropping it.
+ * Only exact substrings are used; nothing is invented. ISO timestamps are mapped back to the date text. */
+function reanchorClaimRef(session: EditorialSession, value: string): { ref: EvidenceRef; value: string } | undefined {
+  const sources = session.evidence.filter(evidence => evidence.text.length);
+  for (const source of sources) {
+    const start = source.text.indexOf(value);
+    if (start >= 0) return { ref: { evidenceId: source.id, revision: source.revision, start, end: start + value.length, quote: value }, value };
+  }
+  const timestamp = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
+  if (!timestamp) return;
+  const [, , , day, hour, minute] = timestamp;
+  for (const source of sources) {
+    const pattern = /(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日(?:\s*\d{1,2}:\d{2})?/g;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(source.text))) {
+      const parts = /(?:\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s*(\d{1,2}):(\d{2}))?/.exec(match[0]);
+      if (!parts) continue;
+      const [, matchDay, matchHour, matchMinute] = parts;
+      if (Number(matchDay) !== Number(day) || matchHour === undefined || Number(matchHour) !== Number(hour) || Number(matchMinute) !== Number(minute)) continue;
+      const quote = source.text.slice(match.index, match.index + match[0].length);
+      return { ref: { evidenceId: source.id, revision: source.revision, start: match.index, end: match.index + match[0].length, quote }, value: quote.trim() };
+    }
+  }
+  return undefined;
+}
 function normalizeClaim(session: EditorialSession, raw: unknown): Record<string, unknown>[] {
-  const claim = obj(raw); const claimId = id(claim?.id); const selector = obj(claim?.selector); const scopeId = id(selector?.scopeId); const predicate = id(selector?.predicate)?.slice(0, 120); const value = id(claim?.value);
+  const claim = obj(raw); const claimId = id(claim?.id); const selector = obj(claim?.selector); const scopeId = id(selector?.scopeId); const predicate = id(selector?.predicate)?.slice(0, 120); const value = id(claim?.value) ?? (typeof claim?.value === 'number' && Number.isFinite(claim.value) ? String(claim.value) : undefined);
   if (!claim || !claimId || !scopeId || !predicate || !value) return [];
-  const refs = repairRefs(session, claim.refs); if (!refs.length) return [];
+  let refs = repairRefs(session, claim.refs); if (!refs.length) return [];
+  let anchoredValue = claimValue(value, refs);
+  const squashValue = (text: string): string => text.replace(/\s+/g, '');
+  if (!refs.some(ref => squashValue(ref.quote).includes(squashValue(anchoredValue)))) {
+    const reanchored = reanchorClaimRef(session, anchoredValue);
+    if (reanchored) { refs = [reanchored.ref]; anchoredValue = reanchored.value; }
+  }
   // A missing or empty basis must stay empty so resolveFacts can still report missing_status_basis.
   // Only a non-array shape (e.g. a model prose label) keeps the legacy repair-by-refs fallback.
   const statusBasis = claim.statusBasis === undefined || claim.statusBasis === null ? [] : Array.isArray(claim.statusBasis) ? repairRefs(session, claim.statusBasis) : refs;
-  const next: Record<string, unknown> = { id: claimId, selector: { scopeId, predicate }, value, refs, epistemic: EPISTEMIC[String(claim.epistemic)] ?? 'pending', visibility: claim.visibility === 'editor_only' || claim.visibility === 'private' ? claim.visibility : 'public', statusBasis };
+  const next: Record<string, unknown> = { id: claimId, selector: { scopeId, predicate }, value: anchoredValue, refs, epistemic: EPISTEMIC[String(claim.epistemic)] ?? 'pending', visibility: claim.visibility === 'editor_only' || claim.visibility === 'private' ? claim.visibility : 'public', statusBasis };
   if (selector?.cardinality === 'single' || selector?.cardinality === 'set') next.selector = { ...next.selector as object, cardinality: selector.cardinality };
   return [next];
 }
@@ -214,3 +278,27 @@ function normalizeNotes(raw: unknown): Record<string, unknown>[] {
     return [{ id: id(note?.id) ?? 'note-' + hashText(text).slice(0, 24), kind, text, relatedIds: items(note?.relatedIds).map(id).filter((related): related is string => !!related) }];
   });
 }
+
+/** A requirement that restates the writing task or a source lookup is not an unknown fact.
+ * Asking it stalls a draft the agent could already write; keep it as a review obligation instead.
+ * Applies to legacy model task patches and to direct/merged directive patches alike. */
+function guardOutputRequirements(session: EditorialSession, taskPatch: Record<string, unknown>, diagnostics: Diagnostics[]): Record<string, unknown> {
+  const requirements = items(taskPatch.requirements).flatMap(requirement => { const item = obj(requirement); return item ? [item] : []; });
+  if (!requirements.length) return taskPatch;
+  const sourceTask = items(taskPatch.requiredSources).length > 0;
+  const editorText = session.evidence.filter(evidence => evidence.kind === 'editor_message').map(evidence => evidence.text).join('\n');
+  const deferToReview = /可以先交|可先交|先交|先发|放编辑备注/.test(editorText);
+  const outputWords = /正文|草稿|备注|字数|篇幅|结构|标题|语气|格式|文体|写法|句子|段落|导语|首句|末句|口径|文案|措辞|文章内容/;
+  const sourceWords = /工作台|素材|材料|来源|查取|查阅|记录单|结果单|原通知|外宣稿/;
+  const kept = requirements.map(requirement => {
+    const description = [id(requirement.label), id(obj(requirement.selector)?.predicate), id(requirement.reason), id(requirement.whyNeeded)].filter((part): part is string => !!part).join('｜');
+    const looksLikeOutput = outputWords.test(description);
+    const looksLikeSourceTask = sourceTask && sourceWords.test(description);
+    if (!looksLikeOutput && !looksLikeSourceTask && !deferToReview) return requirement;
+    const refs = items(requirement.refs).flatMap(ref => { const item = obj(ref); return item ? [item as unknown as EvidenceRef] : []; });
+    diagnostics.push({ owner: 'directive:guard:g6', code: 'requirement_is_output_or_source_task', message: 'Requirement restates the output/source task rather than an unknown fact; defaulted to non-askable pending review: ' + (id(requirement.label) ?? ''), refs });
+    return { ...requirement, askable: false, requiresReview: true };
+  });
+  return { ...taskPatch, requirements: kept };
+}
+

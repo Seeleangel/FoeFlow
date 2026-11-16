@@ -322,6 +322,16 @@ export async function runEditorialController(options: ControllerOptions): Promis
     emit([{ type: 'layout_recorded', layout: renderPublicDocument(projected.document, theme) }]); toolResult('layout', 'progress', 'layout_recorded');
     return true;
   };
+  /**
+   * Any write-loop exit with a current candidate must still run the deterministic tail (review -> layout -> finish).
+   * Skipping it left publishable drafts stuck on content_cycle / write_budget_exhausted even though nothing was wrong.
+   */
+  const runDeterministicPipeline = async (): Promise<EditorialOutcome | undefined> => {
+    const fallback = deterministicNext();
+    if (fallback && fallback !== 'ready' && fallback.tool === 'review') await review();
+    if (s.candidate && (!s.layout || s.layout.contentHash !== s.candidate.contentHash)) layout();
+    return finish();
+  };
   const describeDraftFailure = (raw: string, diagnostics: import('./editorialTypes').Diagnostics[]): string => {
     try {
       const value: unknown = JSON.parse(raw.trim().replace(/^```(?:json)?\s*\n/, '').replace(/\n```$/, ''));
@@ -344,9 +354,32 @@ export async function runEditorialController(options: ControllerOptions): Promis
     };
     const parseReview = (raw: Record<string, unknown>): ReviewStamp | undefined => {
       try {
-        const lines = (value: unknown): string[] => { if (!Array.isArray(value) || value.length > 64 || value.some(line => typeof line !== 'string' || line.length > 2000)) throw new Error('invalid_review'); return value; };
+        // Review models routinely add categories outside the fixed enum ("structure", "fact", ...).
+        // Losing the whole stamp over one synonym discards real blocking findings, so coerce the
+        // category and keep every issue the model actually raised; only the shape is repaired here.
+        const categories = new Set(['unsupported_claim', 'scope', 'privacy', 'permission', 'workflow_leak', 'constraint', 'style']);
+        const lines = (value: unknown): string[] => {
+          if (value !== undefined && (!Array.isArray(value) || value.some(line => typeof line !== 'string'))) throw new Error('invalid_review_lines');
+          return Array.isArray(value) ? value.filter((line): line is string => typeof line === 'string').map(line => line.slice(0, 2000)).slice(0, 64) : [];
+        };
         const notes: EditorialNote[] = lines(raw.notes).map(text => ({ id: 'review-note-' + hashText(text).slice(0,24), kind: 'advisory', text, relatedIds: [] }));
-        return ReviewStampSchema.parse({ inputKey: currentInputKey(s), blocking: lines(raw.blocking), notes, issues: raw.issues ?? [], ...(raw.criterionChecks ? { criterionChecks: raw.criterionChecks } : {}) });
+        const issues = (Array.isArray(raw.issues) ? raw.issues : []).slice(0, 64).flatMap((item, index) => {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+          const issue = item as Record<string, unknown>;
+          const detail = typeof issue.detail === 'string' ? issue.detail.slice(0, 2000) : '';
+          if (!detail) return [];
+          const blockId = issue.span && typeof issue.span === 'object' ? (issue.span as Record<string, unknown>).blockId : undefined;
+          const start = issue.span && typeof issue.span === 'object' ? (issue.span as Record<string, unknown>).start : undefined;
+          const end = issue.span && typeof issue.span === 'object' ? (issue.span as Record<string, unknown>).end : undefined;
+          const span = typeof blockId === 'string' && typeof start === 'number' && Number.isInteger(start) && typeof end === 'number' && Number.isInteger(end) && end > start ? { blockId, start, end } : undefined;
+          return [{ id: typeof issue.id === 'string' && issue.id.trim() ? issue.id : 'review-issue-' + index, category: categories.has(String(issue.category)) ? issue.category : 'constraint', severity: issue.severity === 'blocking' ? 'blocking' : 'advisory', relatedIds: Array.isArray(issue.relatedIds) ? issue.relatedIds.filter((value): value is string => typeof value === 'string') : [], detail, ...(span ? { span } : {}) }];
+        });
+        // A review fail whose stated reason is an editor-side action (review not yet done, address not yet supplied)
+        // is not a defect the writer can fix before handoff: keep it as an undecided check so it becomes a
+        // pending human confirmation instead of a hard delivery blocker.
+        const editorPending = (detail: unknown): boolean => typeof detail === 'string' && /审阅尚未|尚未审阅|未经编辑|编辑尚未|待编辑|编辑未提供|待收到|尚未经编辑/.test(detail);
+        const criterionChecks = Array.isArray(raw.criterionChecks) ? raw.criterionChecks.filter((check): check is Record<string, unknown> => !!check && typeof check === 'object' && !Array.isArray(check) && ['pass', 'fail', 'unknown'].includes(String((check as Record<string, unknown>).status))).map(check => (check.status === 'fail' && editorPending(check.detail) ? { ...check, status: 'unknown' } : check)) : undefined;
+        return ReviewStampSchema.parse({ inputKey: currentInputKey(s), blocking: lines(raw.blocking), notes, issues, ...(criterionChecks ? { criterionChecks } : {}) });
       } catch { return undefined; }
     };
     let raw: Record<string, unknown>;
@@ -367,8 +400,12 @@ export async function runEditorialController(options: ControllerOptions): Promis
     try {
       if (raw.humanChecks !== undefined) {
         if (!Array.isArray(raw.humanChecks)) throw new Error('invalid_human_checks');
-        const human = raw.humanChecks.map(item => { if (!item || typeof item.id !== 'string' || typeof item.instruction !== 'string' || !item.instruction.trim()) throw new Error('invalid_human_checks'); return { id: 'human:' + item.id, origin: 'policy' as const, refs: s.task.coverage?.refs ?? [], severity: 'blocking' as const, verification: 'human' as const, rule: { kind: 'semantic' as const, instruction: item.instruction } }; });
-        const added = human.filter(c => !s.task.criteria.some(old => old.id === c.id));
+        // Review models sometimes copy the already-prefixed id back; normalise before dedupe so repeated
+        // review rounds do not grow human:human:hc-x entries (and duplicate editor confirmations).
+        const humanId = (id: string): string => id.startsWith('human:') ? id : 'human:' + id;
+        const bareHumanId = (id: string): string => id.replace(/^human:/, '');
+        const human = raw.humanChecks.map(item => { if (!item || typeof item.id !== 'string' || typeof item.instruction !== 'string' || !item.instruction.trim()) throw new Error('invalid_human_checks'); return { id: humanId(item.id), origin: 'policy' as const, refs: s.task.coverage?.refs ?? [], severity: 'blocking' as const, verification: 'human' as const, rule: { kind: 'semantic' as const, instruction: item.instruction } }; });
+        const added = human.filter(c => !s.task.criteria.some(old => old.id === c.id || bareHumanId(old.id) === bareHumanId(c.id)));
         if (added.length) emit([{ type: 'task_revised', task: { ...s.task, revision: s.task.revision + 1, criteria: [...s.task.criteria, ...added] } }]);
       }
     } catch { return reviewUnavailable('审稿结果中的人工检查项无效；交付门暂不能确认。'); }
@@ -431,7 +468,7 @@ export async function runEditorialController(options: ControllerOptions): Promis
       let actionProgress = false;
       let rawDecision: Record<string, unknown> | undefined;
       try {
-        rawDecision = await json('decide', { task: s.task, gaps: s.gaps, claims: s.claims, permissions: s.permissions, draft: s.candidate, review: s.review, layoutReady: !!s.layout, sources: cache.discovered(), allowedActions: allowedActions(s, remaining()), observation, remaining: remaining(), programGate: canHandoff(s) });
+        rawDecision = await json('decide', { task: s.task, gaps: s.gaps.filter(gap => gap.blocking), claims: s.claims, permissions: s.permissions, draft: s.candidate, review: s.review, layoutReady: !!s.layout, sources: cache.discovered(), allowedActions: allowedActions(s, remaining()), observation, remaining: remaining(), programGate: canHandoff(s) });
         used.decisions++;
       } catch (error) {
         if (signal.aborted || (error instanceof Error && error.name === 'AbortError') || (error instanceof Error && ['model_budget_exhausted', 'context_capacity', 'deadline_exceeded'].includes(error.message))) throw error;
@@ -445,9 +482,21 @@ export async function runEditorialController(options: ControllerOptions): Promis
           const askableIds = new Set(openGaps(s).filter(gap => gap.state === 'open' && isAskableGap(gap)).map(gap => gap.id));
           if (action.tool === 'ask' && (!action.gapIds.length || action.gapIds.some(id => !askableIds.has(id)))) {
             toolResult('ask', 'rejected', 'ask_selection_rejected:invalid_gap_selection');
-            stalls++;
-            if (stalls >= Math.max(1, config.maxNoProgress)) return stop('no_progress');
-            continue;
+            // Asking a gap the session knows about but has deliberately made unaskable (an output/format
+            // requirement, a constraint, a gap already answered) is a stale decision, not a dead end:
+            // keep any still-askable selection, otherwise let the deterministic scheduler write/review/finish.
+            const gaps = deriveGaps(s);
+            const deferred = new Set(gaps.filter(gap => !isAskableGap(gap)).map(gap => gap.id));
+            const surviving = action.gapIds.filter(id => askableIds.has(id));
+            const deferredSelection = action.gapIds.filter(id => deferred.has(id));
+            if (deferredSelection.length) {
+              if (surviving.length) action = { tool: 'ask', gapIds: surviving };
+              else {
+                const fallback = deterministicNext();
+                if (fallback && fallback !== 'ready' && fallback.tool !== 'ask') { action = undefined; observation = 'invalid_action'; }
+                else { stalls++; if (stalls >= Math.max(1, config.maxNoProgress)) return stop('no_progress'); continue; }
+              }
+            } else { stalls++; if (stalls >= Math.max(1, config.maxNoProgress)) return stop('no_progress'); continue; }
           }
         } catch { invalidAction = true; }
       }
@@ -459,9 +508,19 @@ export async function runEditorialController(options: ControllerOptions): Promis
       }
       if (action && action.tool !== 'write' && !allowedActions(s, remaining()).includes(action.tool)) {
         toolResult(action.tool, 'rejected', 'invalid_or_unknown_action');
-        stalls++;
-        if (stalls >= Math.max(1, config.maxNoProgress)) return stop('no_progress');
-        continue;
+        // Re-reading a source the run already consumed is a harmless stale decision: hand it to the
+        // deterministic scheduler. Other disallowed tools (for example repeated submit) keep the
+        // bounded no-progress stop so a looping model still terminates.
+        if (action.tool === 'read') {
+          const fallback = deterministicNext();
+          action = fallback === 'ready' ? undefined : fallback;
+          if (action) { /* fall through and execute the scheduled action */ }
+          else { stalls++; if (stalls >= Math.max(1, config.maxNoProgress)) return stop('no_progress'); continue; }
+        } else {
+          stalls++;
+          if (stalls >= Math.max(1, config.maxNoProgress)) return stop('no_progress');
+          continue;
+        }
       }
       const scheduled = action ?? deterministicNext();
       if (scheduled === 'ready') { const ready = finish(); if (ready) return ready; stalls++; if (stalls >= Math.max(1, config.maxNoProgress)) return stop('no_progress'); continue; }
@@ -474,7 +533,8 @@ export async function runEditorialController(options: ControllerOptions): Promis
         observation = 'constraint_repair';
       } else if (s.candidate && failedConstraints.length && remaining().writes <= 0 && !openGaps(s).length) {
         markConstraintBudgetExhausted();
-        return stop('write_budget_exhausted');
+        const ready = await runDeterministicPipeline();
+        return ready ?? stop('write_budget_exhausted');
       }
       if (action.tool === 'search') {
         if (!cache.has(action.query) && used.searches >= config.searches) toolResult('search', 'rejected', 'search_budget_exhausted');
@@ -504,11 +564,19 @@ export async function runEditorialController(options: ControllerOptions): Promis
         const key = hashText(stableJson({ claims:semantic.sortedSet(relevantClaims(s).map(c=>semantic.claim(c.id))), task: semantic.task, repairs: semantic.sortedSet(repairs.map(semantic.check)), failure: lastWriteFailure }));
         if (!allowedActions(s, remaining()).includes('write')) {
           toolResult('write', 'rejected', used.writes >= config.writes ? 'write_budget_exhausted' : 'blocking_gaps');
-          if (s.candidate && used.writes >= config.writes && !openGaps(s).length) { markConstraintBudgetExhausted(); await review(); const ready = finish(); return ready ?? stop('write_budget_exhausted'); }
+          if (s.candidate && used.writes >= config.writes && !openGaps(s).length) {
+            markConstraintBudgetExhausted();
+            // Budget exhaustion must still run the remaining review/layout pipeline; otherwise
+            // finish() fails on a missing layout and reports a misleading write_budget_exhausted.
+            const ready = await runDeterministicPipeline(); return ready ?? stop('write_budget_exhausted');
+          }
         } else if (writeKeys.has(key)) {
-          toolResult('write', 'no_progress', 'write_idempotency_hit'); if (s.candidate && !s.review) { await review(); const ready = finish(); if (ready) return ready; }
+          toolResult('write', 'no_progress', 'write_idempotency_hit');
+          // The model asked for the same write again; the candidate is already current. Finish the
+          // remaining deterministic pipeline (review -> layout) instead of stalling until no_progress.
+          const ready = await runDeterministicPipeline(); if (ready) return ready;
         } else {
-          writeKeys.add(key); used.writes++; const draftOptions = { id: 'candidate', revision: (s.candidate?.revision ?? 0) + 1 };
+          writeKeys.add(key); used.writes++; const draftOptions = { id: 'candidate', revision: (s.candidate?.revision ?? 0) + 1, claims: s.claims };
           let rawDraft = await ask('write', buildWriterContext({...s,review:feedback}, repairs, {instructions:action.instructions,invalidArtifact:!!lastWriteFailure}) as unknown as Record<string, unknown>);
           let parsed = parseDraftArtifact(rawDraft, draftOptions);
           const syntaxInvalid = (value: string): boolean => { if (!/^[{`]/.test(value.trim())) return false; try { parseJsonObject(value); return false; } catch { return true; } };
@@ -530,7 +598,13 @@ export async function runEditorialController(options: ControllerOptions): Promis
             toolResult('write', 'rejected', 'invalid_artifact');
             if (writeFailures >= 2) return stop('artifact_invalid', false, { ...classifyFailure('artifact_invalid', 'write'), detail: reason, fields: { reason } });
           }
-          else if (contentHistory.has(parsed.artifact.contentHash) && s.candidate?.origin !== 'legacy') { if (parsed.artifact.editorialNotes.length) emit([{ type: 'notes_recorded', notes: parsed.artifact.editorialNotes }]); toolResult('write', 'no_progress', 'content_cycle'); }
+          else if (contentHistory.has(parsed.artifact.contentHash) && s.candidate?.origin !== 'legacy') {
+            if (parsed.artifact.editorialNotes.length) emit([{ type: 'notes_recorded', notes: parsed.artifact.editorialNotes }]);
+            toolResult('write', 'no_progress', 'content_cycle');
+            // A repeated body is not a delivery failure by itself: when a candidate is already current, finish
+            // the deterministic tail instead of stalling and losing a publishable draft.
+            const ready = await runDeterministicPipeline(); if (ready) return ready;
+          }
           else { lastWriteFailure = ''; repairReview=undefined; contentHistory.add(parsed.artifact.contentHash); emit([{ type: 'candidate_updated', artifact: parsed.artifact }]); actionProgress = true; toolResult('write', 'progress', 'candidate_updated'); }
         }
       } else if (action.tool === 'review') await review();
@@ -541,7 +615,14 @@ export async function runEditorialController(options: ControllerOptions): Promis
       if (!actionProgress && (fingerprints.has(fingerprint) || !improved)) stalls++; else stalls=0;
       fingerprints.add(fingerprint);previousQuality=quality;
       const ready = finish(); if (ready) return ready;
-      if (stalls >= Math.max(1, config.maxNoProgress)) { if (s.candidate && !s.review && !openGaps(s).length) { await review(); const ready = finish(); if (ready) return ready; } return stop('no_progress'); }
+      if (stalls >= Math.max(1, config.maxNoProgress)) {
+        if (s.candidate && !openGaps(s).length) {
+          if (!s.review || !sameInputKey(s.review.inputKey, currentInputKey(s))) await review();
+          if (s.candidate && (!s.layout || s.layout.contentHash !== s.candidate.contentHash)) layout();
+          const ready = finish(); if (ready) return ready;
+        }
+        return stop('no_progress');
+      }
     }
     if (s.candidate && !s.review && used.modelCalls < config.modelCalls) { await review(); const ready = finish(); if (ready) return ready; }
     return stop('decision_budget_exhausted');

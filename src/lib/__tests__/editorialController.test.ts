@@ -69,11 +69,13 @@ describe('controller budget, repair and async edge invariants', () => {
     const model: EditorialModelPort = async ({ stage }) => { calls.push(stage); const raw = replies[stage]?.shift(); if (!raw) throw new Error('fixture_error:'+stage); return raw; };
     const outcome = await runEditorialController({ session: s, model, signal: new AbortController().signal, sources: noSources, onToolResult: result => codes.push(result.code) }); expect(outcome.type).toBe('incomplete'); expect(codes).toContain('content_cycle'); expect(outcome.session.candidate?.bodyMarkdown).toBe('article'); expect(calls.filter(s => s === 'write')).toHaveLength(3); expect(canHandoff(outcome.session).blockers).toContain('public');
   });
-  it('human-pending survives model passes and can only be cleared by an exact-key editor action', async () => {
-    const s = input(), { model } = queue(s,[{ tool: 'write', instructions: 'Write' },{ tool: 'review' },{ tool: 'submit' },{ tool: 'submit' },{ tool: 'submit' }],['{"title":"Title","bodyMarkdown":"Body"}'],[{ blocking: [], notes: [], humanChecks: [{ id: 'publication', instruction: 'Editor must verify publication readiness' }] }]);
-    const outcome = await runEditorialController({ session: s, model, signal: new AbortController().signal, sources: noSources }); expect(outcome.type).toBe('incomplete'); const current = outcome.session; expect(canHandoff(current).blockers).toContain('human:publication');
-    current.review!.criterionChecks = [{ criterionId: 'human:publication', status: 'pass', verifier: 'model', detail: 'The model says done' }]; expect(canHandoff(current).blockers).toContain('human:publication');
-    const verified = applyControlEvent(current,{ sessionId: current.sessionId, runId: current.activeRunId!, expectedRevision: current.revision, type: 'human_verified', verification: { criterionId: 'human:publication', inputKey: currentInputKey(current), status: 'pass', actor: 'editor', verifiedAt: '2026-11-11T23:40:00+08:00' } }); expect(canHandoff(verified).blockers).toEqual([]);
+  it('human-verification checks travel with the handoff instead of blocking delivery', async () => {
+    const s = input(), { model } = queue(s,[{ tool: 'write', instructions: 'Write' },{ tool: 'review' }],['{"title":"Title","bodyMarkdown":"Body"}'],[{ blocking: [], notes: [], humanChecks: [{ id: 'publication', instruction: 'Editor must verify publication readiness' }] }]);
+    const outcome = await runEditorialController({ session: s, model, signal: new AbortController().signal, sources: noSources }); expect(outcome.type).toBe('draft'); const current = outcome.session;
+    const human = (session: typeof current) => canHandoff(session).checks.find(c => c.criterionId === 'human:publication');
+    expect(canHandoff(current).blockers).toEqual([]); expect(human(current)).toMatchObject({ status: 'unknown', verifier: 'human' });
+    current.review!.criterionChecks = [{ criterionId: 'human:publication', status: 'pass', verifier: 'model', detail: 'The model says done' }]; expect(human(current)?.status).toBe('unknown');
+    const verified = applyControlEvent(current,{ sessionId: current.sessionId, runId: current.activeRunId!, expectedRevision: current.revision, type: 'human_verified', verification: { criterionId: 'human:publication', inputKey: currentInputKey(current), status: 'pass', actor: 'editor', verifiedAt: '2026-11-11T23:40:00+08:00' } }); expect(human(verified)?.status).toBe('pass');
   });
   it('global deadline cancels deferred I/O and late completion produces no tool event', async () => {
     vi.useFakeTimers(); try { const s = input(), onEvent = vi.fn(); let resolve!: (value:string)=>void; const model: EditorialModelPort = () => new Promise(done => { resolve = done; }); const running = runEditorialController({ session: s, model, signal: new AbortController().signal, sources: noSources, budget: { maxElapsedMs: 10 }, onEvent }); await vi.advanceTimersByTimeAsync(11); const outcome = await running; expect(outcome.type).toBe('incomplete'); expect(outcome.session.lastRun?.stop?.code).toBe('deadline_exceeded'); resolve(JSON.stringify(planned(s))); await Promise.resolve(); expect(onEvent).not.toHaveBeenCalled(); } finally { vi.useRealTimers(); }
@@ -165,3 +167,38 @@ it('keeps structure and theme instructions as criteria instead of asking for the
   expect(outcome.session.gaps.some(gap => gap.selector.predicate === 'structure' || gap.selector.predicate === 'theme')).toBe(false);
   expect(stages).not.toContain('extract');
 });
+
+it('a stale ask on a deferred gap advances the deterministic scheduler instead of stopping no_progress', async () => {
+  const s = input();
+  // A constraint gap is real but never askable; asking it must not burn the run's no-progress budget.
+  const constraintGapId = 'constraint-' + hashText('public-body').slice(0, 24);
+  const { model, calls } = queue(s, [{ tool: 'ask', gapIds: [constraintGapId] }, { tool: 'write', instructions: 'Write' }], ['# Title\nBody']);
+  const outcome = await runEditorialController({ session: s, model, signal: new AbortController().signal, sources: noSources });
+  expect(outcome.type).toBe('draft');
+  expect(calls.filter(stage => stage === 'decide')).toHaveLength(2);
+  expect(calls).toContain('review');
+});
+
+
+it('turns a review fail that only waits on the editor into a pending human check instead of a blocker', async () => {
+  const s = input(), base = planned(s), refs = base.taskPatch.refs;
+  const preflight = { ...base, taskPatch: { ...base.taskPatch, criteria: [
+    { id: 'review-gate', origin: 'user', refs, severity: 'blocking', verification: 'semantic', rule: { kind: 'semantic', instruction: '正文声明先交编辑审阅，审阅后定稿' } },
+  ], requirements: [] } };
+  let decisions = 0;
+  const model: EditorialModelPort = async ({ stage }) => {
+    if (stage === 'preflight') return JSON.stringify(preflight);
+    if (stage === 'decide') return JSON.stringify(++decisions === 1 ? { tool: 'write', instructions: 'Write per criteria' } : { tool: 'review' });
+    if (stage === 'write') return JSON.stringify({ title: '秋季读书心得', bodyMarkdown: '引入\n主体\n结尾，先交编辑审阅。' });
+    if (stage === 'review') return JSON.stringify({ blocking: [], notes: [], criterionChecks: [
+      { criterionId: 'review-gate', status: 'fail', verifier: 'semantic', detail: '正文声明先交编辑审阅，但审阅尚未实际发生。' },
+    ] });
+    throw new Error('fixture_error:' + stage);
+  };
+  const outcome = await runEditorialController({ session: s, model, sources: noSources, signal: new AbortController().signal });
+  expect(outcome.type).toBe('draft');
+  expect(canHandoff(outcome.session).blockers).toEqual([]);
+  expect(outcome.session.review?.criterionChecks?.find(check => check.criterionId === 'review-gate')?.status).toBe('unknown');
+  expect(outcome.session.review?.blocking).toEqual([]);
+});
+

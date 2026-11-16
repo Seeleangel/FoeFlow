@@ -231,4 +231,11 @@ describe('mapping suggestion validation rules', () => {
     expect(validateAnswerMappings(batch, text, { mappings: [{ gapId: ['gap-a', 'gap-b'], start: 0, end: 5, quote: 'A 是 3', confidence: 0.9 }] })).toMatchObject({ rejected: 1, mappings: [] });
     expect(validateAnswerMappings(batch, text, {})).toMatchObject({ shapeValid: false });
   });
+
+  it('recovers mappings whose offsets are off by a character instead of re-asking', () => {
+    const shifted = (gapId: string, quote: string) => { const start = text.indexOf(quote) + 1; return { gapId, start, end: start + quote.length + 1, quote, confidence: 0.9 }; };
+    const result = validateAnswerMappings(batch, text, { mappings: [shifted('gap-a', '30 人'), shifted('gap-b', '10 月 20 日')] });
+    expect(result).toMatchObject({ shapeValid: true, rejected: 0 });
+    expect(result.mappings.map(mapping => text.slice(mapping.start, mapping.end))).toEqual(['30 人', '10 月 20 日']);
+  });
 });

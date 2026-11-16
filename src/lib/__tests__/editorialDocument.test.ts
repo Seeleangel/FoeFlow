@@ -21,6 +21,40 @@ describe('one public content model', () => {
     for (const bodyMarkdown of ['<script>alert(1)</script>', '```html\nHi\n```', '# Second title', '::: container']) expect(parseDraftArtifact(JSON.stringify({ title: 'X', bodyMarkdown }), { id: 'd', revision: 1 }).artifact).toBeUndefined();
     expect(parseDraftArtifact(JSON.stringify({ title: 'X', bodyMarkdown: 'Text', blocks: [] }), { id: 'd', revision: 1 }).artifact).toBeUndefined();
   });
+  it('accepts a body that repeats the exact title as a leading H1 but still rejects any other heading', () => {
+    const accepted = parseDraftArtifact(JSON.stringify({ title: 'X', bodyMarkdown: '# X\n\nPublic body' }), { id: 'd', revision: 1 });
+    expect(accepted.artifact?.bodyMarkdown).toBe('Public body');
+    expect(parseDraftArtifact(JSON.stringify({ title: 'X', bodyMarkdown: '# Y\n\nPublic body' }), { id: 'd', revision: 1 }).artifact).toBeUndefined();
+    const prefixed = parseDraftArtifact(JSON.stringify({ title: '示例稿｜论坛预热', bodyMarkdown: '示例稿\n\n# 论坛预热\n\nPublic body' }), { id: 'd', revision: 1 });
+    expect(prefixed.artifact?.title).toBe('示例稿｜论坛预热');
+    expect(prefixed.artifact?.bodyMarkdown).not.toContain('# 论坛预热');
+  });
+  it('tolerates drifted claimLinks wire shapes and derives attribution from claim values in the body', () => {
+    const s = createEditorialSession('s'); s.claims = [{ id: 'c1', selector: { scopeId: 'p', predicate: 'deadline' }, value: '2025年6月17日20:00', refs: [], epistemic: 'supported', visibility: 'public', statusBasis: [] }];
+    const bodyMarkdown = '报名截止时间为2025年6月17日20:00。';
+    const drifted = parseDraftArtifact(JSON.stringify({ title: 'T', bodyMarkdown, claimLinks: [{ claimId: 'c1', label: 'deadline' }, { claimIds: ['c1'] }, { claimId: 'made-up', blockId: 'b-never' }] }), { id: 'd', revision: 1, claims: s.claims });
+    expect(drifted.artifact).toBeDefined();
+    expect(drifted.artifact!.claimLinks).toEqual([{ blockId: drifted.artifact!.blocks[0].id, claimIds: ['c1'] }]);
+    expect(drifted.artifact!.claimLinks.some(link => link.claimIds.includes('made-up'))).toBe(false);
+    // Omitting claimLinks entirely is valid: the public claim value in the body is enough to derive the link.
+    const derived = parseDraftArtifact(JSON.stringify({ title: 'T', bodyMarkdown }), { id: 'd', revision: 1, claims: s.claims });
+    expect(derived.artifact!.claimLinks).toEqual([{ blockId: derived.artifact!.blocks[0].id, claimIds: ['c1'] }]);
+    // A quoted claim in the title does not create a body link.
+    const titleOnly = parseDraftArtifact(JSON.stringify({ title: '2025年6月17日20:00', bodyMarkdown: 'Other body' }), { id: 'd', revision: 1, claims: s.claims });
+    expect(titleOnly.artifact!.claimLinks).toEqual([]);
+  });
+  it('tolerates editorialNotes sent as a bare string or a loose object instead of a note array', () => {
+    const asString = parseDraftArtifact(JSON.stringify({ title: 'T', bodyMarkdown: 'Public body', editorialNotes: '已补齐时间与地点，未添加外部信息。' }), { id: 'd', revision: 1 });
+    expect(asString.artifact).toBeDefined();
+    expect(asString.artifact!.editorialNotes).toHaveLength(1);
+    expect(asString.artifact!.editorialNotes[0].kind).toBe('process');
+    expect(asString.artifact!.editorialNotes[0].text).toContain('已补齐');
+    const loose = parseDraftArtifact(JSON.stringify({ title: 'T', bodyMarkdown: 'Public body', editorialNotes: [{ kind: 'unknown_kind', note: 'object note' }, 'second note'], assets: null }), { id: 'd', revision: 1 });
+    expect(loose.artifact).toBeDefined();
+    expect(loose.artifact!.editorialNotes.map(note => note.text)).toEqual(['object note', 'second note']);
+    expect(loose.artifact!.editorialNotes.every(note => note.relatedIds.length === 0)).toBe(true);
+    expect(loose.artifact!.assets).toEqual([]);
+  });
   it('writer constraints retain executable bounds and placement instead of losing the rules', () => {
     const s = createEditorialSession('s'); s.task.criteria = [{ id: 'length', origin: 'policy', refs: [], rule: { kind: 'length', min: 50, max: 100, unit: 'visible_characters' }, severity: 'blocking', verification: 'deterministic' }];
     expect(buildWriterContext(s).constraints[0].rule).toEqual(s.task.criteria[0].rule);

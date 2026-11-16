@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { createEditorialSession, hashText, type EvidenceRef } from '../editorialTypes';
 import { deriveGaps, buildQuestion, applyGapChoice } from '../editorialGaps';
+import { parseContentBlocks } from '../editorialDocument';
+const withCandidate = (s: ReturnType<typeof createEditorialSession>, bodyMarkdown: string) => {
+  s.candidate = { schemaVersion: 2, id: 'd', revision: 1, title: '专题', bodyMarkdown, contentHash: hashText('专题\n' + bodyMarkdown), blocks: parseContentBlocks(bodyMarkdown), origin: 'model', claimLinks: [], assets: [], editorialNotes: [] };
+  return s;
+};
 const fixture = () => {
   const s = createEditorialSession('s'), text = 'Ada quote. Ben quote. Omit Ben quote.';
   s.evidence = [{ id: 'e', revision: 1, text, contentHash: hashText(text), kind: 'editor_message', provenance: { messageId: 'm1' }, context: { scenario: 'real' } }];
@@ -35,5 +40,41 @@ describe('independent gaps', () => {
     const { s, ref } = fixture(); s.task = { ...s.task, objective: '采访', revision: 1, intents: ['interview'] };
     const next = applyGapChoice(s, deriveGaps(s)[1].id, 'omit', [ref('Omit Ben quote')]);
     expect(deriveGaps(next).find(g => g.requirementId === 'quote-Ben')?.state).toBe('waived'); expect(deriveGaps(next).find(g => g.requirementId === 'quote-Ada')?.state).toBe('open');
+  });
+});
+describe('material shortfall becomes a blocking question', () => {
+  const criterion = (id: string, verification: 'semantic' | 'human', severity: 'blocking' | 'advisory', instruction = '每位对谈者均须有一段真实相处经历和一句可公开引用的采访原话') => ({
+    id, origin: 'user' as const, refs: [], severity, verification,
+    rule: { kind: 'semantic' as const, instruction },
+  });
+  it('asks the editor instead of delivering a placeholder draft', () => {
+    const { s } = fixture();
+    s.task.criteria = [criterion('crit-quote', 'semantic', 'blocking'), criterion('crit-human', 'human', 'blocking')];
+    withCandidate(s, '素材检查结果：缺项清单如下。素材卡明确说明当前材料没有提供，暂不能进入人物故事写作。');
+    const gap = deriveGaps(s).find(item => item.requirementId === 'material_insufficiency');
+    expect(gap).toMatchObject({ kind: 'missing', gapClass: 'fact', blocking: true, askable: true, state: 'open' });
+    expect(gap!.label).toContain('素材');
+    const question = buildQuestion(s, [gap!.id]);
+    expect(question.items[0].requested).toContain('素材');
+    expect(question.items[0].options).toEqual(['补充所需素材', '编辑确认按现有素材交付']);
+  });
+  it('asks when the draft says the existing statistics cannot support required verified numbers', () => {
+    const { s } = fixture();
+    s.task.criteria = [criterion('crit-check-stats', 'semantic', 'blocking', '先核查现有统计对两项数据的支撑，不足时明确列出需补的两项')];
+    withCandidate(s, '经核查，现有统计尚不足以支撑这两项数据。因此，需补的两项数据为：实际结项队伍总数与参与学生总人数。在补齐前不以立项数替代。');
+    expect(deriveGaps(s).some(item => item.requirementId === 'material_insufficiency')).toBe(true);
+  });
+  it('ignores advisory-only criteria and drafts that never admit a shortfall', () => {
+    const { s } = fixture();
+    // An advisory criterion alone, with no blocking fact still owed to the editor, does not stop delivery.
+    s.task.requirements = s.task.requirements.map(requirement => ({ ...requirement, necessity: 'optional' as const }));
+    s.task.criteria = [criterion('crit-quote', 'semantic', 'advisory')];
+    withCandidate(s, '缺项清单：素材卡明确说明当前材料没有提供。');
+    expect(deriveGaps(s).some(item => item.requirementId === 'material_insufficiency')).toBe(false);
+    // A clean draft is not turned into a question even when a blocking criterion is semantic.
+    s.task.requirements = fixture().s.task.requirements;
+    s.task.criteria = [criterion('crit-quote', 'semantic', 'blocking')];
+    withCandidate(s, '国际友谊日专题稿：两名同学的对谈记录如下。');
+    expect(deriveGaps(s).some(item => item.requirementId === 'material_insufficiency')).toBe(false);
   });
 });

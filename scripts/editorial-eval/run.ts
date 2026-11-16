@@ -10,6 +10,7 @@ import type {EditorialModelPort} from '../../src/lib/editorialController';
 import {DEFAULT_RUN_BUDGET} from '../../src/lib/editorialTypes';
 import {StageReplay,parseCaseFile,parseRecipes,replayQueues,runCase,unexecutedCase,type Recipe} from './replay';
 import {caseMetrics,groupedMetrics} from './metrics';
+import {deriveView} from './derived';
 import {verifyHash,makeManifest,configSummary,type ModelConfig} from './manifest';
 export function realModel(config:ModelConfig,record:(meta:unknown)=>void,transport:typeof fetch=fetch):EditorialModelPort {
  return async({stage,data},signal)=>{
@@ -66,7 +67,9 @@ export async function main(args:string[],env:Record<string,string|undefined>=pro
   for(const c of selected)for(let trial=1;trial<=trials;trial++){
    const recipe=recipes[c.id];const queues=replayQueues(c,recipe?.responses);const q=new StageReplay(queues.effective);const requests:unknown[]=[];
    const model=a.mock?q.call:realModel(config,meta=>requests.push(meta));
-   const r=abort.signal.aborted?unexecutedCase(c,{runId,trial,recipe,approvedProtocol:protocols[c.id]}):await runCase(c,{mode:a.mock?'mock':'real',model,runId,trial,recipe,approvedProtocol:protocols[c.id],signal:abort.signal});
+   const raw=abort.signal.aborted?unexecutedCase(c,{runId,trial,recipe,approvedProtocol:protocols[c.id]}):await runCase(c,{mode:a.mock?'mock':'real',model,runId,trial,recipe,approvedProtocol:protocols[c.id],signal:abort.signal});
+   // Derived fields are pure functions of the trial; assertions read them without any model call.
+   const r={...raw,derived:deriveView(raw)};
    const m=caseMetrics(c,r,recipe);metrics.push(m);const secrets=[config.key??'',...r.privateSpans];allPrivateSpans.push(...r.privateSpans);
    await save(c.id+'-'+trial+'.json',{...r,privateSpans:undefined,requests,queueEvidence:{originalHashes:queues.originalHashes,effectiveHashes:queues.effectiveHashes,consumed:a.mock?q.consumed:null},remaining:a.mock?q.remaining():undefined,metrics:m},secrets);
   }

@@ -1,4 +1,4 @@
-import { EditorialSessionSchema, FactClaimSchema, ScopeSchema, PermissionSchema, hashText, stableJson, sameEntitySet, type EditorialSession, type EvidenceRef, type FactClaim, type FactSelector, type FactResolution, type Diagnostics, type Gap, type PermissionUse, type Scope } from './editorialTypes';
+import { EditorialSessionSchema, FactClaimSchema, ScopeSchema, PermissionSchema, hashText, stableJson, sameEntitySet, type EditorialSession, type EvidenceRef, type FactClaim, type FactSelector, type FactResolution, type Diagnostics, type Gap, type PermissionUse, type Permission, type Scope } from './editorialTypes';
 export const FACT_CAPACITY = Object.freeze({ claims: 256, evidenceCharacters: 120_000 });
 export function validateEvidenceRef(s: EditorialSession, ref: EvidenceRef): boolean {
   const source = s.evidence.find(e => e.id === ref.evidenceId);
@@ -85,17 +85,32 @@ export function resolveFacts(s: EditorialSession): FactResolution {
   const relevantCanonical = new Set([...relevant].map(id => aligned.scopeIds.get(id) ?? id));
   for (const claim of current) {
     const scope = scopes.find(scope => scope.id === claim.selector.scopeId)!;
-    const duplicateIdentity = scopes.some(other => other.id !== scope.id && other.kind === scope.kind && stableJson(other.anchors) === stableJson(scope.anchors) && stableJson(other.qualifiers) === stableJson(scope.qualifiers) && aligned.scopeIds.get(other.id) !== aligned.scopeIds.get(scope.id));
-    if ((scope.identity === 'provisional' && !aligned.alignedScopeIds.has(scope.id)) || duplicateIdentity) {
+    // The synthetic 'editor' scope anchors the editor's own message and 'authorization:*' scopes record
+    // preview confirmation attempts; neither is a second content subject, so they must not be read as a
+    // same-kind identity that makes every provisional content scope look ambiguous.
+    const contentScopes = scopes.filter(other => other.id !== 'editor' && !other.id.startsWith('authorization:'));
+    const duplicateIdentity = contentScopes.some(other => other.id !== scope.id && other.kind === scope.kind && stableJson(other.anchors) === stableJson(scope.anchors) && stableJson(other.qualifiers) === stableJson(scope.qualifiers) && aligned.scopeIds.get(other.id) !== aligned.scopeIds.get(scope.id));
+    // A provisional identity is only genuinely ambiguous when another same-kind identity exists or an alignment
+    // attempt names this scope. A lone scope described by one authoritative editor message is not ambiguity;
+    // asking the editor to "align" it would demand information the editor never withheld.
+    const ambiguousIdentity = contentScopes.some(other => other.id !== scope.id && other.kind === scope.kind && aligned.scopeIds.get(other.id) !== aligned.scopeIds.get(scope.id)) || s.alignments.some(alignment => alignment.leftId === scope.id || alignment.rightId === scope.id);
+    if ((scope.identity === 'provisional' && !aligned.alignedScopeIds.has(scope.id) && ambiguousIdentity) || duplicateIdentity) {
       if (relevantCanonical.has(aligned.scopeIds.get(scope.id) ?? scope.id)) conflicts.push(makeGap(claim, 'scope', [claim.id], [claim.value])); continue;
     }
     if (claim.epistemic !== 'supported' && claim.epistemic !== 'disputed') continue;
     const key = selectorKey(claim.selector, aligned.scopeIds); groups.set(key, [...groups.get(key) ?? [], claim]);
   }
+  // An editor who lists several references in one sentence intends them together ("参考A和B"), not as an exclusive value.
+  const editorSentences = s.evidence.filter(e => e.kind === 'editor_message').map(e => normalized(e.text).split(/[。；;！!？?\n]/));
+  const jointReferences = (predicate: string, values: string[]) => /参考|来源|素材|材料|依据|引用/.test(predicate) && values.length > 1 && editorSentences.some(sentences => sentences.some(sentence => {
+    const positions = values.map(value => sentence.indexOf(value));
+    if (positions.some(position => position < 0)) return false;
+    return !/[或]|不是|而非|而不是/.test(sentence.slice(Math.min(...positions), Math.max(...positions)));
+  }));
   for (const group of groups.values()) {
     const values = [...new Set(group.map(c => normalized(c.value)))];
     const additive = group.every(c => c.selector.cardinality === 'set' && validRefs(s, c.selector.cardinalityRefs ?? []));
-    if (values.length > 1 && !additive || group.some(c => c.epistemic === 'disputed')) conflicts.push({ ...makeGap({ ...group[0], selector: { ...group[0].selector, scopeId: aligned.scopeIds.get(group[0].selector.scopeId)! } }, 'conflict', group.map(c => c.id), group.map(c => c.value)), blocking: relevantCanonical.has(aligned.scopeIds.get(group[0].selector.scopeId) ?? group[0].selector.scopeId) });
+    if (values.length > 1 && !additive && !jointReferences(group[0].selector.predicate, values) || group.some(c => c.epistemic === 'disputed')) conflicts.push({ ...makeGap({ ...group[0], selector: { ...group[0].selector, scopeId: aligned.scopeIds.get(group[0].selector.scopeId)! } }, 'conflict', group.map(c => c.id), group.map(c => c.value)), blocking: relevantCanonical.has(aligned.scopeIds.get(group[0].selector.scopeId) ?? group[0].selector.scopeId) });
   }
   const permissions = s.permissions.filter(p => {
     const valid = PermissionSchema.is(p) && validRefs(s, p.refs) && (scopes.some(scope => scope.id === p.subjectId) || claims.some(c => c.id === p.subjectId));
@@ -107,6 +122,16 @@ export function resolveFacts(s: EditorialSession): FactResolution {
 export function permissionAllows(s: EditorialSession, subjectId: string, use: PermissionUse): boolean {
   const permissions = resolveFacts(s).permissions.filter(p => subjectKey(s, p.subjectId) === subjectKey(s, subjectId) && p.uses.some(u => stableJson(u) === stableJson(use)));
   return permissions.length > 0 && permissions.every(p => p.state === 'allowed');
+}
+
+/** A permission attached to the claim itself is authoritative for every publication use (fail closed); a scope-wide permission only constrains the uses it declares, so an unrelated denial cannot block the whole scope's facts. */
+export function claimPublicationAllowed(s: EditorialSession, subjectId: string, permissions: Permission[] = resolveFacts(s).permissions): boolean {
+  if (!hasSubjectPermissions(s, subjectId)) return true;
+  const claimScoped = s.claims.some(claim => subjectKey(s, claim.id) === subjectKey(s, subjectId));
+  return claimPublicationUses(s, subjectId).every(use => {
+    const matching = permissions.filter(permission => subjectKey(s, permission.subjectId) === subjectKey(s, subjectId) && permission.uses.some(item => stableJson(item) === stableJson(use)));
+    return matching.length ? matching.every(permission => permission.state === 'allowed') : !claimScoped;
+  });
 }
 
 /** Evidence-backed upserts; omissions never delete prior claims and invalid changes cannot downgrade them.

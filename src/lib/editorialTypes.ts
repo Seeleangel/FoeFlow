@@ -171,6 +171,9 @@ export const DIAGNOSTIC_GATE_EFFECTS: Readonly<Record<string, 'block' | 'info'>>
   // Info: visible in the diagnostic panel, never a second gate.
   invalid_reference: 'info', legacy_scope_unresolved: 'info', invalid_directive: 'info', invalid_directive_reference: 'info', low_confidence_directive: 'info',
   requirement_duplicates_constraint: 'info', requirement_overlaps_constraint: 'info', requirement_without_dependency: 'info',
+  requirement_is_output_or_source_task: 'info', permission_preview_confirmation: 'info', permission_not_required: 'info', source_is_editor_message: 'info',
+  requirement_duplicate_span: 'info', source_negates_real_content: 'info',
+  criterion_fact_unresolved: 'info',
   invalid_alignment: 'info', invalid_scope: 'info', invalid_claim: 'info', invalid_claims: 'info', invalid_scopes: 'info', invalid_permissions: 'info',
   scope_unresolved: 'info', missing_status_basis: 'info', invalid_cardinality_basis: 'info', legacy_not_evidence: 'info', invalid_supersedes: 'info',
   invalid_patch: 'info', invalid_fact_patch: 'info', batch_candidate_not_validated: 'info', claim_identity_changed: 'info',

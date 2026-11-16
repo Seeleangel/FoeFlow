@@ -298,3 +298,92 @@ describe('answer confirmation corrections (design §5.2)', () => {
     expect(editorialStopExplanation(session)).toContain('当前没有待确认的问题');
   });
 });
+
+describe('P0-3 output/source guards', () => {
+  it('keeps an output-task requirement out of the question list', () => {
+    const session = directiveSession('写一条通知，正文保留时间地点。');
+    const { task, diagnostics } = normalized(session, [
+      { kind: 'missing_value', text: '正文内容', quote: '写一条通知', label: '正文内容', predicate: 'draft_body', whyNeeded: '编辑要求写正文' },
+    ]);
+    const requirements = (task?.requirements as Record<string, unknown>[]) ?? [];
+    expect(requirements).toHaveLength(1);
+    expect(requirements[0]).toMatchObject({ askable: false, requiresReview: true });
+    expect(diagnostics.some(diagnostic => diagnostic.code === 'requirement_is_output_or_source_task')).toBe(true);
+    const gaps = deriveGaps({ ...session, task: { ...session.task, requirements: requirements as unknown as EditorialSession['task']['requirements'] } });
+    expect(gaps.find(gap => gap.requirementId === requirements[0].id)?.blocking).toBe(false);
+  });
+
+  it('keeps a source-lookup requirement out of the question list when a source is named', () => {
+    const session = directiveSession('读工作台的会操结果单，正文写明两项成绩。');
+    const { task } = normalized(session, [
+      { kind: 'source', text: '工作台的会操结果单', quote: '读工作台的会操结果单', title: '会操结果单', purpose: '核对成绩' },
+      { kind: 'missing_value', text: '从工作台会操结果单查取两项成绩', quote: '正文写明两项成绩', label: '从工作台会操结果单查取两项成绩', predicate: 'results', whyNeeded: '正文需要写明成绩' },
+    ]);
+    const requirements = (task?.requirements as Record<string, unknown>[]) ?? [];
+    expect(requirements[0]).toMatchObject({ askable: false, requiresReview: true });
+  });
+
+  it('turns a preview-confirmation authorization into a pending human check', () => {
+    const session = directiveSession('稿子发预览时我会确认用途。');
+    const { raw } = normalized(session, [
+      { kind: 'authorization', text: '稿子发预览时我会确认用途', quote: '稿子发预览时我会确认用途', use: '编辑将在预览中确认用途' },
+    ]);
+    const task = raw.taskPatch as Record<string, unknown>;
+    const criteria = (task.criteria as Record<string, unknown>[]) ?? [];
+    expect(criteria.some(criterion => criterion.verification === 'human' && String((criterion.rule as Record<string, unknown>).instruction).includes('预览'))).toBe(true);
+    expect(criteria.some(criterion => (criterion.rule as Record<string, unknown>).kind === 'permission')).toBe(false);
+  });
+
+  it('treats "可以先交" as a review note rather than a blocking question', () => {
+    const session = directiveSession('统计口径还在核对，简讯可以先交。');
+    const { task } = normalized(session, [
+      { kind: 'missing_value', text: '待核统计口径', quote: '统计口径还在核对', label: '待核统计口径', predicate: 'metric_scope', whyNeeded: '正文需要口径' },
+    ]);
+    const requirements = (task?.requirements as Record<string, unknown>[]) ?? [];
+    expect(requirements[0]).toMatchObject({ askable: false, requiresReview: true });
+  });
+
+  it('attaches a scopeless directive fact to the only known scope instead of a sibling editor scope', () => {
+    const session = directiveSession('标题为「研习室开放提醒」。');
+    const ref = span(session);
+    session.scopes = [{ id: 'scope-announcement', kind: 'other', label: '研习室开放提醒公告', anchors: [ref], qualifiers: [], identity: 'provisional' }];
+    const { raw } = normalized(session, [{ kind: 'fact', text: '标题为「研习室开放提醒」', quote: '标题为「研习室开放提醒」', predicate: '标题', value: '研习室开放提醒' }]);
+    const factPatch = raw.factPatch as Record<string, unknown>;
+    const claims = (factPatch.claims as Record<string, unknown>[]) ?? [];
+    expect(claims[0].selector).toMatchObject({ scopeId: 'scope-announcement' });
+    expect(((factPatch.scopes as Record<string, unknown>[]) ?? []).some(scope => scope.id === 'editor')).toBe(false);
+  });
+
+  it('does not demand a library read for a source that names the editor message itself', () => {
+    const session = directiveSession('以编辑消息中的已核实事实为唯一依据，核对现稿。');
+    const { task, diagnostics } = normalized(session, [
+      { kind: 'source', text: '以编辑消息中的已核实事实为唯一事实依据', quote: '以编辑消息中的已核实事实为唯一依据', title: '以编辑消息中的已核实事实为唯一事实依据' },
+    ]);
+    expect(((task?.requiredSources as Record<string, unknown>[]) ?? []).length).toBe(0);
+    expect(diagnostics.some(diagnostic => diagnostic.code === 'source_is_editor_message')).toBe(true);
+  });
+
+  it('does not demand a library read for a source that negates real content', () => {
+    const session = directiveSession('我只需要一篇给高校学生看的示例稿，没有真实活动信息。直接写。');
+    const { task, diagnostics } = normalized(session, [
+      { kind: 'source', text: '没有真实活动信息，不得引入真实活动事实', quote: '没有真实活动信息', title: '没有真实活动信息，不得引入真实活动事实' },
+    ]);
+    expect(((task?.requiredSources as Record<string, unknown>[]) ?? []).length).toBe(0);
+    expect(diagnostics.some(diagnostic => diagnostic.code === 'source_negates_real_content')).toBe(true);
+  });
+
+  it('does not re-ask a fact already covered by a non-askable requirement on the same span', () => {
+    const session = directiveSession('书目、名额和行前准备以工作台的本期准备单为准，不得自行编造。');
+    const ref = span(session);
+    session.task = applyTaskPatch(session, {
+      baseRevision: session.task.revision, refs: [ref], objective: '写参加提醒', intents: ['inform'],
+      requirements: [{ id: 'req-prep-sheet', selector: { scopeId: 'editor', predicate: 'details_source' }, label: '书目、名额、行前准备须指向本期准备单', whyNeeded: '需要来源', reason: '需要来源', refs: [ref], necessity: 'blocking', resolution: 'supply_fact', askable: false }],
+    }).task;
+    const { task, diagnostics } = normalized(session, [
+      { kind: 'missing_value', text: '本期准备单中的书目、名额、行前准备具体内容', quote: '书目、名额和行前准备以工作台的本期准备单为准', label: '本期准备单中的书目、名额、行前准备具体内容', predicate: '本期准备单中的书目、名额、行前准备具体内容', whyNeeded: '提醒中需要具体书目与名额' },
+    ]);
+    expect(((task?.requirements as Record<string, unknown>[]) ?? []).length).toBe(0);
+    expect(diagnostics.some(diagnostic => diagnostic.code === 'requirement_duplicate_span')).toBe(true);
+  });
+});
+

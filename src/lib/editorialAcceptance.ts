@@ -45,7 +45,7 @@ function renderedBlocks(s: EditorialSession, layout: LayoutStamp): { first?: str
   const theme = getAllThemes().find(theme => theme.name === layout.themeId);
   let canonical = false;
   try { const expected = theme && renderPublicDocument(projectPublicArtifact(s.candidate), theme); canonical = !!expected && expected.html === layout.html && expected.themeVersion === layout.themeVersion; } catch { /* fail closed */ }
-  const valid = canonical && !unsafe && !!article && article.children.length === blocks.length + 1 && rendered.length === blocks.length && rendered.every((node, i) => node.getAttribute('data-editorial-block') === blocks[i].id && normalized(node.textContent ?? '') === normalized(blocks[i].text)) && normalized(root.body.textContent ?? '') === normalized(s.candidate.title + blocks.map(b => b.text).join(''));
+  const valid = canonical && !unsafe && !!article && article.children.length === blocks.length + 1 && rendered.length === blocks.length && rendered.every((node, i) => node.getAttribute('data-editorial-block') === blocks[i].id && normalized(node.textContent ?? '') === normalized(blocks[i].text)) && normalized(root.body.textContent ?? '') === normalized(s.candidate.title + blocks.map(b => visibleBlockText(b.text)).join(''));
   const firstBlock = blocks.find(b => b.kind === 'paragraph');
   const first = root.querySelector('article p');
   return { valid, first: first && firstBlock && first.getAttribute('data-editorial-block') === firstBlock.id ? first.textContent ?? '' : undefined };
@@ -70,13 +70,27 @@ export function validateAcceptance(s: EditorialSession, layout?: LayoutStamp): G
   };
   for (const source of s.task.requiredSources) { const status = sourceStatus(source.id); add('source:' + source.id, status.status, status.detail); }
   for (const criterion of s.task.criteria) {
-    let status: GateCheck['status'] = 'unknown', detail = 'Cannot deterministically verify this criterion.', verifier = criterion.verification;
+    let status: GateCheck['status'] = 'unknown', detail = 'Cannot deterministically verify this criterion.', verifier = criterion.verification, semanticReviewed = false, unverifiableFacts = false;
     const rule = criterion.rule;
     if (criterion.verification === 'deterministic' && rule.kind !== 'semantic' || rule.kind === 'permission' || rule.kind === 'source_read') {
       switch (rule.kind) {
         case 'include_facts': {
-          const facts = rule.factIds.map(claim), text = rule.location === 'first_body_paragraph' ? first : body;
-          status = !facts.length || facts.some(c => !c || c.epistemic !== 'supported' || c.visibility !== 'public') ? 'unknown' : text !== undefined && facts.every(c => normalized(text).includes(normalized(c!.value))) ? 'pass' : 'fail'; detail = 'Facts must occur in the required body location.'; break;
+          // A criterion may name claims the extraction never produced, or (as live models often do)
+          // reference requirement ids instead of claim ids. Neither is evidence that the body is wrong:
+          // requirement ids are already enforced by the requirement checks below, so only ids that
+          // resolve to neither a claim nor a requirement leave the check unknown.
+          const named = rule.factIds.map(claim), facts = named.filter((c): c is FactClaim => !!c);
+          const requirementIds = rule.factIds.filter(id => !claim(id) && s.task.requirements.some(requirement => requirement.id === id));
+          const unresolved = rule.factIds.filter(id => !claim(id) && !s.task.requirements.some(requirement => requirement.id === id));
+          const text = rule.location === 'first_body_paragraph' ? first : body;
+          unverifiableFacts = unresolved.length > 0;
+          status = unresolved.length || facts.some(c => c.epistemic !== 'supported' || c.visibility !== 'public') ? 'unknown'
+            : !facts.length ? 'pass'
+            : text !== undefined && facts.every(c => normalized(text).includes(normalized(c.value)) || rule.location === 'body' && normalized(s.candidate?.title ?? '').includes(normalized(c.value))) ? 'pass' : 'fail';
+          const notes: string[] = [];
+          if (requirementIds.length) notes.push(`${requirementIds.length} id(s) point at task requirements; those are enforced as requirement checks.`);
+          if (unresolved.length) notes.push(`${unresolved.length} id(s) resolve to no claim or requirement: ${unresolved.join(', ')}`);
+          detail = 'Facts must occur in the required body location.' + (notes.length ? ' ' + notes.join(' ') : ''); break;
         }
         case 'exclude_claims': { const facts = rule.factIds.map(claim); status = facts.some(c => !c) ? 'unknown' : facts.some(c => normalized(body + (s.candidate?.title ?? '')).includes(normalized(c!.value))) ? 'fail' : 'pass'; break; }
         case 'length': { const n = [...normalized(body)].length; status = n >= (rule.min ?? 0) && n <= (rule.max ?? Infinity) ? 'pass' : 'fail'; detail = `Visible body characters (excluding whitespace): ${n}`; break; }
@@ -98,10 +112,22 @@ export function validateAcceptance(s: EditorialSession, layout?: LayoutStamp): G
       if (human) { status = human.status; verifier = 'human'; detail = 'Editor verified this exact input revision.'; }
       else if (criterion.verification !== 'human' && s.review && sameInputKey(s.review.inputKey, inputKey)) {
         const check = s.review.criterionChecks?.find(check => check.criterionId === criterion.id);
-        if (check) { status = check.status; verifier = 'semantic'; detail = check.detail; }
+        if (check) { status = check.status; verifier = 'semantic'; detail = check.detail; semanticReviewed = true; }
       }
     }
-    add(criterion.id, status, detail, criterion.severity === 'blocking', verifier);
+    // A human-verification criterion is answered by the editor during handoff review, not by the agent.
+    // Blocking the draft on it would ask the editor to confirm before receiving the draft, so it is
+    // recorded as a pending handoff check instead of a delivery blocker.
+    const humanPending = verifier === 'human' && status === 'unknown';
+    // A semantic criterion the reviewer could not decide ("unknown") is likewise an editor handoff note, not
+    // proof that the draft is wrong. Only an explicit review "fail" may keep a publishable draft from delivery.
+    const semanticPending = verifier === 'semantic' && semanticReviewed && status === 'unknown';
+    // A fact id the extraction never registered cannot be checked mechanically, and it is not evidence
+    // that the body is wrong: the live model may name the same fact differently. Surface it as a
+    // handoff note instead of a delivery blocker, so a correct draft is not trapped in a repair loop.
+    const factsPending = unverifiableFacts && status === 'unknown';
+    const pending = humanPending || semanticPending || factsPending;
+    add(criterion.id, status, humanPending ? '待编辑人工确认：' + (detail || criterion.id) : semanticPending ? '待人工确认（语义判据无法机械核验）：' + (detail || criterion.id) : factsPending ? '待人工确认（事实条目未登记，无法机械核验）：' + (detail || criterion.id) : detail, criterion.severity === 'blocking' && !pending, verifier);
   }
   // Requirements are independently enforced; unrecognised detail cannot close another selector.
   for (const requirement of s.task.requirements) {
