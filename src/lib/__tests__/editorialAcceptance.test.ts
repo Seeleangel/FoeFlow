@@ -104,4 +104,15 @@ describe('acceptance is task-specific and fail closed', () => {
     expect(validateAcceptance(s).blockers).toEqual([]); s.review.inputKey.taskRevision++; expect(validateAcceptance(s).blockers).toContain('tone');
   });
   it('an empty plan is not a successful extraction', () => { const { s } = fixture(); s.task = createEditorialSession('x').task; expect(validateAcceptance(s).blockers).toContain('task_plan'); });
+  it('rebinds review currency when the internal sheet changes, but not when review advisories merge in', () => {
+    const { s } = fixture(); s.candidate!.editorialNotes = [{ id: 'sheet', kind: 'process', text: '处理单 v1', relatedIds: [] }];
+    const before = currentInputKey(s);
+    // Review notes are merged into the candidate after the stamp; they cannot invalidate their own review.
+    s.candidate!.editorialNotes = [...s.candidate!.editorialNotes, { id: 'note', kind: 'advisory', text: '请确认报名人数上限。', relatedIds: [] }];
+    expect(currentInputKey(s)).toEqual(before);
+    // A rewritten internal sheet is new contract content, so the review must run again on it.
+    s.candidate!.editorialNotes = s.candidate!.editorialNotes.map(note => note.id === 'sheet' ? { ...note, text: '处理单 v2' } : note);
+    expect(currentInputKey(s).notesHash).not.toBe(before.notesHash);
+    expect(currentInputKey(s).contentHash).toBe(before.contentHash);
+  });
 });

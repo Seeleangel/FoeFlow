@@ -96,7 +96,7 @@ export function deriveView(r: CaseResult): DerivedView {
     firstParagraphCompact: firstText,
     bodyHasAllFacts: atomicFacts.every(fact => contains(fact) || coveredByDigits(fact, bodyText)),
     firstParagraphHasAllFacts: atomicFacts.every(fact => containsFirst(fact) || coveredByDigits(fact, firstText)),
-    reviewAligned: !!review && !!session && review.inputKey !== undefined && JSON.stringify(review.inputKey) === JSON.stringify(currentInputKey(session)),
+    reviewAligned: !!review && !!session && review.inputKey !== undefined && (() => { const key = currentInputKey(session); const stored = review.inputKey as typeof key; return stored.contentHash === key.contentHash && stored.evidenceRevision === key.evidenceRevision && stored.taskRevision === key.taskRevision && stored.policyRevision === key.policyRevision && (stored.notesHash === undefined || stored.notesHash === key.notesHash); })(),
     layoutAligned: !!layout && !!candidate && layout.contentHash === candidate.contentHash && layout.htmlHash === hashText(layout.html),
     sourceTitles: [...new Set((session?.evidence ?? []).filter((entry: any) => entry.kind === 'library').map((entry: any) => String(entry.provenance?.documentTitle ?? entry.provenance?.title ?? '')).filter(Boolean))] as string[],
     stages,

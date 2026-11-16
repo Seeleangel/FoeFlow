@@ -64,6 +64,12 @@ describe('material shortfall becomes a blocking question', () => {
     withCandidate(s, '经核查，现有统计尚不足以支撑这两项数据。因此，需补的两项数据为：实际结项队伍总数与参与学生总人数。在补齐前不以立项数替代。');
     expect(deriveGaps(s).some(item => item.requirementId === 'material_insufficiency')).toBe(true);
   });
+  it('keeps a trailing editor note from blocking a draft that is otherwise complete', () => {
+    const { s } = fixture();
+    s.task.criteria = [criterion('crit-quote', 'semantic', 'blocking')];
+    withCandidate(s, '新生资源导读：图书馆开放时间与借阅流程见正文。\n\n备注：「阅读原文」地址待补（地址尚未收到，需编辑补充）');
+    expect(deriveGaps(s).some(item => item.requirementId === 'material_insufficiency')).toBe(false);
+  });
   it('ignores advisory-only criteria and drafts that never admit a shortfall', () => {
     const { s } = fixture();
     // An advisory criterion alone, with no blocking fact still owed to the editor, does not stop delivery.

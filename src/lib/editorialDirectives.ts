@@ -239,7 +239,13 @@ export function directivesToPatches(session: EditorialSession, directives: Direc
         diagnostics.push({ owner: 'directive:guard:g9', code: 'requirement_duplicate_span', message: 'Missing-value directive restates an editor span already covered by a non-askable requirement: ' + (directive.label ?? directive.text), refs: directive.refs });
         continue;
       }
-      if (!directive.whyNeeded) {
+      // The editor may explicitly ask the agent to verify and supply a figure without the model naming a
+      // criterion ("先检查现有统计能否支撑，不够就列明该补哪两项"). That is an editor-sourced missing fact,
+      // not a model-invented question: give it the dependency and let the askable gap reach the editor.
+      const supplyRequest = /核查|核对|核验|确认|支撑|该补|需补|列明|索取|补充|不足/;
+      const supplyText = [directive.label, directive.text, directive.predicate].filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join('｜');
+      const whyNeeded = directive.whyNeeded ?? (supplyRequest.test(supplyText) ? '编辑明确要求先核对/补充这项数据，不能自行编造' : undefined);
+      if (!whyNeeded) {
         diagnostics.push({ owner: 'directive:guard:g3', code: 'requirement_without_dependency', message: 'Missing-value directive has no whyNeeded; no question is created.', refs: directive.refs });
         continue;
       }
@@ -249,16 +255,16 @@ export function directivesToPatches(session: EditorialSession, directives: Direc
       // is not an unknown fact: asking the editor would stall a draft that can already be written.
       // Same for a value labelled as something to look up in a named source. Keep it visible as a
       // review obligation instead of a blocking question.
-      const description = [directive.label, directive.text, directive.predicate, directive.whyNeeded].filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join('｜');
+      const description = [directive.label, directive.text, directive.predicate, whyNeeded].filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join('｜');
       const looksLikeOutput = /正文|草稿|备注|字数|篇幅|结构|标题|语气|格式|文体|写法|句子|段落|导语|首句|末句|口径|文案|措辞|文章内容/.test(description);
       const looksLikeSourceTask = requiredSources.length > 0 && /工作台|素材|材料|来源|查取|查阅|记录单|结果单|原通知|外宣稿/.test(description);
       const deferToReview = /可以先交|可先交|先交|先发|放编辑备注/.test(editorText);
       if (looksLikeOutput || looksLikeSourceTask || deferToReview) {
-        requirements.push({ id: takeId(directive.entityId, 'directive-requirement'), selector: { scopeId, predicate: (directive.predicate ?? directive.text).slice(0, 120) }, label: directive.label ?? directive.text, reason: directive.whyNeeded, whyNeeded: directive.whyNeeded, refs: directive.refs, necessity: 'blocking', resolution: 'supply_fact', askable: false, requiresReview: true });
+        requirements.push({ id: takeId(directive.entityId, 'directive-requirement'), selector: { scopeId, predicate: (directive.predicate ?? directive.text).slice(0, 120) }, label: directive.label ?? directive.text, reason: whyNeeded, whyNeeded, refs: directive.refs, necessity: 'blocking', resolution: 'supply_fact', askable: false, requiresReview: true });
         diagnostics.push({ owner: 'directive:guard:g6', code: 'requirement_is_output_or_source_task', message: 'Missing-value directive restates the output/source task rather than an unknown fact; defaulted to non-askable pending review: ' + (directive.label ?? directive.text), refs: directive.refs });
         continue;
       }
-      requirements.push({ id: takeId(directive.entityId, 'directive-requirement'), selector: { scopeId, predicate: (directive.predicate ?? directive.text).slice(0, 120) }, label: directive.label ?? directive.text, reason: directive.whyNeeded, whyNeeded: directive.whyNeeded, refs: directive.refs, necessity: 'blocking', resolution: 'supply_fact' });
+      requirements.push({ id: takeId(directive.entityId, 'directive-requirement'), selector: { scopeId, predicate: (directive.predicate ?? directive.text).slice(0, 120) }, label: directive.label ?? directive.text, reason: whyNeeded, whyNeeded, refs: directive.refs, necessity: 'blocking', resolution: 'supply_fact' });
       continue;
     }
     if (directive.kind === 'authorization') {
@@ -272,7 +278,9 @@ export function directivesToPatches(session: EditorialSession, directives: Direc
       // "直接写，无需追问授权" is an explicit waiver, not an authorization the agent must go ask for.
       // Creating a blocking permission requirement here makes the agent question an instruction it
       // already received; keep the editor's wording as evidence only.
-      if (/无需|不用|不必|直接写|不要追问|无需追问/.test(use) || /无需|不用|不必|直接写|不要追问|无需追问/.test(directive.text)) {
+      // "简讯可以先交（统计口径未定不阻断交付）" is likewise a waiver of the permission question, not an
+      // authorization the agent must go ask for.
+      if (/无需|不用|不必|直接写|不要追问|无需追问|可以先交|可先交|先交|先发|不阻断|不阻塞|无需等待|不必等待/.test(use) || /无需|不用|不必|直接写|不要追问|无需追问|可以先交|可先交|先交|先发|不阻断|不阻塞|无需等待|不必等待/.test(directive.text)) {
         diagnostics.push({ owner: 'directive:guard:g7', code: 'permission_not_required', message: 'Authorization directive waives the check; no permission question is created.', refs: directive.refs });
         continue;
       }
@@ -300,6 +308,16 @@ export function directivesToPatches(session: EditorialSession, directives: Direc
       // editor already settled ("write an example with placeholders").
       if (/无真实|没有真实|不存在真实|不得引入真实|不要引入真实|不涉及真实|无实际活动/.test(sourceLabel)) {
         diagnostics.push({ owner: 'directive:guard:g10', code: 'source_negates_real_content', message: 'Source directive negates real content; it is a constraint, not a document to read: ' + sourceLabel.slice(0, 200), refs: directive.refs });
+        continue;
+      }
+      // The same editor sentence can arrive twice as a source directive. Two required sources with one title
+      // leave the second without a read receipt, so its gap stays open and the agent keeps asking for a
+      // document it already read. Reuse the existing obligation and record the duplicate.
+      const sourceTitle = directive.title ?? directive.text ?? '';
+      const compactTitle = (value: string) => value.replace(/\s+/g, '').replace(/[，。、；：""''（）()「」《》【】]/g, '');
+      const duplicateSource = !directive.documentId && requiredSources.some(existing => !existing.selector.documentId && compactTitle(existing.selector.title ?? '') === compactTitle(sourceTitle));
+      if (duplicateSource) {
+        diagnostics.push({ owner: 'directive:guard:g11', code: 'source_duplicate_title', message: 'Source directive duplicates an existing required source title: ' + sourceTitle.slice(0, 200), refs: directive.refs });
         continue;
       }
       requiredSources.push({ id: takeId(directive.entityId, 'directive-source'), selector: { ...(directive.documentId ? { documentId: directive.documentId } : {}), ...(directive.title ?? directive.text ? { title: directive.title ?? directive.text } : {}) }, purpose: directive.purpose ?? directive.text, refs: directive.refs, depth: 'relevant_excerpt', state: 'pending' });

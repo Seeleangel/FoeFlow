@@ -38,7 +38,15 @@ export function deriveGaps(s: EditorialSession): Gap[] {
   // that material can only come from the editor, so the shortfall becomes a blocking editor question.
   const candidateBody = s.candidate?.bodyMarkdown ?? '';
   if (s.phase !== 'confirmed' && candidateBody) {
-    const admitsMissingMaterial = /缺项清单|待补数据|尚不能支撑|尚不足以支撑|不足以支撑|无法支撑|不能支撑|须先补齐|补齐前|暂不能(?:进入|写作|交付|发布|定稿)|均待核验|需补的|需补两|待补|无法给出/.test(candidateBody);
+    // A trailing note ("备注：地址待补") records one pending detail on an otherwise complete draft; it is not
+    // the draft admitting the material is insufficient, so it must not block delivery of that draft.
+    const bodyLines = candidateBody.split(/\n+/).filter(line => line.trim());
+    while (bodyLines.length > 1 && /^(?:备注|注|说明)[：:]/.test(bodyLines[bodyLines.length - 1].trim())) bodyLines.pop();
+    const substantiveBody = bodyLines.join('\n');
+    // Only a statement that the draft cannot be completed is a shortfall. A bare pending marker such as
+    // "【待补：阅读原文链接地址】" records one outstanding field on a complete draft; treating every "待补"
+    // as a material shortfall sent several finished drafts back to the editor as questions.
+    const admitsMissingMaterial = /缺项清单|待补数据|待补的两项|尚不能支撑|尚不足以支撑|不足以支撑|无法支撑|不能支撑|须先补齐|补齐前|暂不能(?:进入|写作|交付|发布|定稿)|均待核验|需补的|需补两|无法给出/.test(substantiveBody);
     const unmet = s.task.criteria.filter(criterion => criterion.severity === 'blocking' && (criterion.verification === 'semantic' || criterion.verification === 'human'));
     // Only a blocking criterion about the missing material itself turns the admission into a question;
     // an incidental aside in an otherwise complete draft must not stop delivery.

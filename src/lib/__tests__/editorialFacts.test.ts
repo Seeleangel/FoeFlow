@@ -102,4 +102,23 @@ describe('scoped evidence resolution', () => {
     const r = resolveFacts(s); expect(r.claims[0].epistemic).toBe('supported'); expect(r.permissions[0].state).toBe('denied');
   });
 });
+  it('keeps distinct provisional subjects apart unless they share a predicate', () => {
+    const text = '写一条提案进展，另外有人转述整改完成情况，我还没核实。'; const s = createEditorialSession('s');
+    s.evidence = [{ id: 'e', revision: 1, contentHash: hashText(text), text, kind: 'editor_message', provenance: { messageId: 'm' }, context: { scenario: 'real' } }];
+    const ref = (quote: string): EvidenceRef => ({ evidenceId: 'e', revision: 1, start: text.indexOf(quote), end: text.indexOf(quote) + quote.length, quote });
+    s.scopes = [{ id: 's0', kind: 'other', label: '提案进展', anchors: [ref('提案进展')], qualifiers: [], identity: 'provisional' }, { id: 's1', kind: 'other', label: '整改转述', anchors: [ref('整改完成情况')], qualifiers: [], identity: 'provisional' }];
+    s.claims = [{ id: 'c0', selector: { scopeId: 's0', predicate: '提案处理安排' }, value: '提案进展', refs: [ref('提案进展')], epistemic: 'supported', visibility: 'public', statusBasis: [] }, { id: 'c1', selector: { scopeId: 's1', predicate: '整改完成状态' }, value: '整改完成情况', refs: [ref('整改完成情况')], epistemic: 'supported', visibility: 'public', statusBasis: [] }];
+    s.task.targetScopes = ['s0', 's1'];
+    expect(resolveFacts(s).conflicts.filter(gap => gap.kind === 'scope')).toHaveLength(0);
+    s.claims[1].selector.predicate = '提案处理安排';
+    expect(resolveFacts(s).conflicts.some(gap => gap.kind === 'scope')).toBe(true);
+  });
+  it('treats an English reference predicate as a complementary reference list', () => {
+    const text = '参考工作台的导读和材料，写给新生。'; const s = createEditorialSession('s');
+    s.evidence = [{ id: 'e', revision: 1, contentHash: hashText(text), text, kind: 'editor_message', provenance: { messageId: 'm' }, context: { scenario: 'real' } }];
+    const ref = (quote: string): EvidenceRef => ({ evidenceId: 'e', revision: 1, start: text.indexOf(quote), end: text.indexOf(quote) + quote.length, quote });
+    s.scopes = [{ id: 's0', kind: 'other', label: '新生', anchors: [ref('新生')], qualifiers: [], identity: 'aligned' }];
+    s.claims = ['导读', '材料'].map((value, i): FactClaim => ({ id: 'c' + i, selector: { scopeId: 's0', predicate: 'referenceSource' }, value, refs: [ref(value)], epistemic: 'supported', visibility: 'public', statusBasis: [] }));
+    expect(resolveFacts(s).conflicts.filter(gap => gap.kind === 'conflict')).toHaveLength(0);
+  });
 export function scopedFixture(): EditorialSession { return fixture().s; }

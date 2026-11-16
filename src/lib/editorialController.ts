@@ -15,7 +15,7 @@ import type { ModelCallRecord, RunReport, StopRecord } from './editorialTypesV3'
 import { classifyFailure, failureFromError, makeStopRecord, type FailureDescriptor } from './editorialFailure';
 import { loadRequiredSource, readSourceDocument, recordSourceConsumption, SourceSearchCache, localSourcePort, type SourcePort } from './editorialSources';
 import { getAllThemes, getDefaultTheme } from './themeLoader';
-import { DEFAULT_RUN_BUDGET, RunBudgetSchema, ToolActionSchema, ReviewStampSchema, EditorialNoteSchema, gateEffectOf, hashText, stableJson, sameEntitySet, currentInputKey, sameInputKey, type EditorialSession, type EditorialOutcome, type EditorialToolEvent, type ToolAction, type ToolResult, type RunBudget, type GateReport, type LoadedSource, type EditorialNote, type ReviewStamp } from './editorialTypes';
+import { DEFAULT_RUN_BUDGET, RunBudgetSchema, ToolActionSchema, ReviewStampSchema, EditorialNoteSchema, gateEffectOf, hashText, stableJson, sameEntitySet, currentInputKey, sameInputKey, artifactNotesKey, type EditorialSession, type EditorialOutcome, type EditorialToolEvent, type ToolAction, type ToolResult, type RunBudget, type GateReport, type LoadedSource, type EditorialNote, type ReviewStamp } from './editorialTypes';
 export type EditorialStage = 'preflight' | 'extract' | 'decide' | 'write' | 'review' | 'repair' | 'mapping';
 export type EditorialModelPort = (request: { stage: EditorialStage; data: Record<string, unknown> }, signal: AbortSignal) => Promise<string>;
 export interface ControllerOptions {
@@ -599,11 +599,23 @@ export async function runEditorialController(options: ControllerOptions): Promis
             if (writeFailures >= 2) return stop('artifact_invalid', false, { ...classifyFailure('artifact_invalid', 'write'), detail: reason, fields: { reason } });
           }
           else if (contentHistory.has(parsed.artifact.contentHash) && s.candidate?.origin !== 'legacy') {
+            // The body may be unchanged while the internal handoff sheet (editorialNotes) or asset
+            // states improved. That is real contract progress: adopt it as a new candidate revision
+            // (the review input key includes the notes hash, so the reviewer is re-run on the new
+            // sheet) instead of calling it a content cycle and stalling.
+            const notesChanged = !!s.candidate && (artifactNotesKey(parsed.artifact.editorialNotes) !== artifactNotesKey(s.candidate.editorialNotes) || stableJson(parsed.artifact.assets) !== stableJson(s.candidate.assets));
+            if (notesChanged && s.candidate) {
+              const revised = { ...s.candidate, revision: s.candidate.revision + 1, editorialNotes: parsed.artifact.editorialNotes, assets: parsed.artifact.assets, origin: 'model' as const };
+              emit([{ type: 'candidate_updated', artifact: revised }]);
+              actionProgress = true;
+              toolResult('write', 'progress', 'notes_updated');
+            } else {
             if (parsed.artifact.editorialNotes.length) emit([{ type: 'notes_recorded', notes: parsed.artifact.editorialNotes }]);
             toolResult('write', 'no_progress', 'content_cycle');
             // A repeated body is not a delivery failure by itself: when a candidate is already current, finish
             // the deterministic tail instead of stalling and losing a publishable draft.
             const ready = await runDeterministicPipeline(); if (ready) return ready;
+            }
           }
           else { lastWriteFailure = ''; repairReview=undefined; contentHistory.add(parsed.artifact.contentHash); emit([{ type: 'candidate_updated', artifact: parsed.artifact }]); actionProgress = true; toolResult('write', 'progress', 'candidate_updated'); }
         }

@@ -89,11 +89,15 @@ export function resolveFacts(s: EditorialSession): FactResolution {
     // preview confirmation attempts; neither is a second content subject, so they must not be read as a
     // same-kind identity that makes every provisional content scope look ambiguous.
     const contentScopes = scopes.filter(other => other.id !== 'editor' && !other.id.startsWith('authorization:'));
-    const duplicateIdentity = contentScopes.some(other => other.id !== scope.id && other.kind === scope.kind && stableJson(other.anchors) === stableJson(scope.anchors) && stableJson(other.qualifiers) === stableJson(scope.qualifiers) && aligned.scopeIds.get(other.id) !== aligned.scopeIds.get(scope.id));
-    // A provisional identity is only genuinely ambiguous when another same-kind identity exists or an alignment
-    // attempt names this scope. A lone scope described by one authoritative editor message is not ambiguity;
-    // asking the editor to "align" it would demand information the editor never withheld.
-    const ambiguousIdentity = contentScopes.some(other => other.id !== scope.id && other.kind === scope.kind && aligned.scopeIds.get(other.id) !== aligned.scopeIds.get(scope.id)) || s.alignments.some(alignment => alignment.leftId === scope.id || alignment.rightId === scope.id);
+    // Two same-kind provisional scopes are only one ambiguous identity when they describe the same predicate:
+    // a photo list and a campus piece, or the 11th and the 10th edition of a project, share a kind but are
+    // distinct subjects. Treating them as rivals asked the editor to "align" entities never in doubt.
+    const rivalScopes = contentScopes.filter(other => other.id !== scope.id && other.kind === scope.kind && aligned.scopeIds.get(other.id) !== aligned.scopeIds.get(scope.id) && current.some(otherClaim => otherClaim.selector.scopeId === other.id && normalized(otherClaim.selector.predicate) === normalized(claim.selector.predicate)));
+    const duplicateIdentity = rivalScopes.some(other => stableJson(other.anchors) === stableJson(scope.anchors) && stableJson(other.qualifiers) === stableJson(scope.qualifiers));
+    // A provisional identity is only genuinely ambiguous when another same-predicate identity exists or an
+    // alignment attempt names this scope. A lone scope described by one authoritative editor message is not
+    // ambiguity; asking the editor to "align" it would demand information the editor never withheld.
+    const ambiguousIdentity = rivalScopes.length > 0 || s.alignments.some(alignment => alignment.leftId === scope.id || alignment.rightId === scope.id);
     if ((scope.identity === 'provisional' && !aligned.alignedScopeIds.has(scope.id) && ambiguousIdentity) || duplicateIdentity) {
       if (relevantCanonical.has(aligned.scopeIds.get(scope.id) ?? scope.id)) conflicts.push(makeGap(claim, 'scope', [claim.id], [claim.value])); continue;
     }
@@ -102,7 +106,7 @@ export function resolveFacts(s: EditorialSession): FactResolution {
   }
   // An editor who lists several references in one sentence intends them together ("参考A和B"), not as an exclusive value.
   const editorSentences = s.evidence.filter(e => e.kind === 'editor_message').map(e => normalized(e.text).split(/[。；;！!？?\n]/));
-  const jointReferences = (predicate: string, values: string[]) => /参考|来源|素材|材料|依据|引用/.test(predicate) && values.length > 1 && editorSentences.some(sentences => sentences.some(sentence => {
+  const jointReferences = (predicate: string, values: string[]) => /参考|来源|素材|材料|依据|引用|reference|source|material|asset|citation/i.test(predicate) && values.length > 1 && editorSentences.some(sentences => sentences.some(sentence => {
     const positions = values.map(value => sentence.indexOf(value));
     if (positions.some(position => position < 0)) return false;
     return !/[或]|不是|而非|而不是/.test(sentence.slice(Math.min(...positions), Math.max(...positions)));

@@ -30,7 +30,7 @@ export interface EditorialNote { id: Id; kind: 'asset' | 'fact_check' | 'process
 export interface AssetUse { assetId: Id; slotId: Id; use: string; channel?: string; identity?: PermissionUse['identity']; publicCaption?: string; state: 'included' | 'placeholder' | 'omitted' }
 export interface ContentBlock { id: Id; kind: 'paragraph' | 'heading' | 'list' | 'quote' | 'asset_slot'; text: string }
 export interface DraftArtifact { schemaVersion: 2; id: Id; revision: number; title: string; bodyMarkdown: string; contentHash: Hash; blocks: ContentBlock[]; claimLinks: { blockId: Id; claimIds: Id[] }[]; editorialNotes: EditorialNote[]; assets: AssetUse[]; origin: 'model' | 'editor' | 'legacy'; originalMarkdown?: string }
-export interface InputKey { contentHash: Hash; evidenceRevision: number; taskRevision: number; policyRevision: number }
+export interface InputKey { contentHash: Hash; notesHash?: Hash; evidenceRevision: number; taskRevision: number; policyRevision: number }
 export interface GateCheck { criterionId: Id; status: 'pass' | 'fail' | 'unknown'; verifier: string; detail: string }
 export interface GateReport { inputKey: InputKey; checks: GateCheck[]; blockers: string[] }
 export interface ReviewIssue { id: Id; category: 'unsupported_claim' | 'scope' | 'privacy' | 'permission' | 'workflow_leak' | 'constraint' | 'style'; severity: 'blocking' | 'advisory'; relatedIds: Id[]; span?: { blockId: Id; start: number; end: number }; detail: string }
@@ -132,7 +132,7 @@ const note = obj({ id, kind: en('asset', 'fact_check', 'process', 'advisory'), t
 const asset = obj({ assetId: id, slotId: id, use: id, channel: opt(id), identity: opt(en('named', 'anonymous', 'not_applicable')), publicCaption: opt(str), state: en('included', 'placeholder', 'omitted') });
 const block = obj({ id, kind: en('paragraph', 'heading', 'list', 'quote', 'asset_slot'), text: str });
 const draft = obj({ schemaVersion: en(2), id, revision: num, title: id, bodyMarkdown: id, contentHash: id, blocks: arr(block), claimLinks: arr(obj({ blockId: id, claimIds: ids })), editorialNotes: arr(note), assets: arr(asset), origin: en('model', 'editor', 'legacy'), originalMarkdown: opt(str) });
-const inputKey = obj({ contentHash: str, evidenceRevision: num, taskRevision: num, policyRevision: num });
+const inputKey = obj({ contentHash: str, notesHash: opt(str), evidenceRevision: num, taskRevision: num, policyRevision: num });
 const gate = obj({ inputKey, checks: arr(obj({ criterionId: id, status: en('pass', 'fail', 'unknown'), verifier: id, detail: str })), blockers: arr(str) });
 const issue = obj({ id, category: en('unsupported_claim', 'scope', 'privacy', 'permission', 'workflow_leak', 'constraint', 'style'), severity: en('blocking', 'advisory'), relatedIds: ids, span: opt(obj({ blockId: id, start: num, end: num })), detail: str });
 const review = obj({ inputKey, issues: arr(issue), blocking: arr(str), notes: arr(note), criterionChecks: opt(arr(obj({ criterionId: id, status: en('pass', 'fail', 'unknown'), verifier: id, detail: str }))) });
@@ -172,7 +172,7 @@ export const DIAGNOSTIC_GATE_EFFECTS: Readonly<Record<string, 'block' | 'info'>>
   invalid_reference: 'info', legacy_scope_unresolved: 'info', invalid_directive: 'info', invalid_directive_reference: 'info', low_confidence_directive: 'info',
   requirement_duplicates_constraint: 'info', requirement_overlaps_constraint: 'info', requirement_without_dependency: 'info',
   requirement_is_output_or_source_task: 'info', permission_preview_confirmation: 'info', permission_not_required: 'info', source_is_editor_message: 'info',
-  requirement_duplicate_span: 'info', source_negates_real_content: 'info',
+  requirement_duplicate_span: 'info', source_negates_real_content: 'info', source_duplicate_title: 'info',
   criterion_fact_unresolved: 'info',
   invalid_alignment: 'info', invalid_scope: 'info', invalid_claim: 'info', invalid_claims: 'info', invalid_scopes: 'info', invalid_permissions: 'info',
   scope_unresolved: 'info', missing_status_basis: 'info', invalid_cardinality_basis: 'info', legacy_not_evidence: 'info', invalid_supersedes: 'info',
@@ -259,7 +259,9 @@ export function artifactContentHash(title: string, bodyMarkdown: string, assets:
   return hashText(title + '\n' + bodyMarkdown + (active.length ? '\nassets:' + stableJson(active) : ''));
 }
 
-export function currentInputKey(s: EditorialSession): InputKey { return { contentHash: s.candidate?.contentHash ?? '', evidenceRevision: s.evidenceRevision, taskRevision: s.task.revision, policyRevision: s.policyRevision }; }
+/** Review advisories are merged into the candidate after a review; they are not part of the sheet the writer owns. */
+export function artifactNotesKey(notes: readonly EditorialNote[]): Hash { return hashText(stableJson(notes.filter(note => note.kind !== 'advisory'))); }
+export function currentInputKey(s: EditorialSession): InputKey { return { contentHash: s.candidate?.contentHash ?? '', notesHash: artifactNotesKey(s.candidate?.editorialNotes ?? []), evidenceRevision: s.evidenceRevision, taskRevision: s.task.revision, policyRevision: s.policyRevision }; }
 export function sameInputKey(a: InputKey, b: InputKey): boolean { return stableJson(a) === stableJson(b); }
 
 /** Entity order is not evidence progress. */
